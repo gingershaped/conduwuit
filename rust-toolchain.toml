@@ -9,7 +9,7 @@
 # If you're having trouble making the relevant changes, bug a maintainer.
 
 [toolchain]
-channel = "1.84.0"
+channel = "1.85.0"
 profile = "minimal"
 components = [
     # For rust-analyzer
@@ -24,5 +24,6 @@ targets = [
     "x86_64-unknown-linux-gnu",
     "x86_64-unknown-linux-musl",
     "aarch64-unknown-linux-musl",
+    "aarch64-unknown-linux-gnu",
     #"aarch64-apple-darwin",
 ]

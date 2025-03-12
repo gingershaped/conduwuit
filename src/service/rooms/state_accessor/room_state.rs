@@ -1,8 +1,8 @@
 use std::borrow::Borrow;
 
-use conduwuit::{err, implement, PduEvent, Result};
+use conduwuit::{PduEvent, Result, StateKey, err, implement};
 use futures::{Stream, StreamExt, TryFutureExt};
-use ruma::{events::StateEventType, EventId, RoomId};
+use ruma::{EventId, RoomId, events::StateEventType};
 use serde::Deserialize;
 
 /// Returns a single PDU from `room_id` with key (`event_type`,`state_key`).
@@ -27,7 +27,7 @@ where
 pub fn room_state_full<'a>(
 	&'a self,
 	room_id: &'a RoomId,
-) -> impl Stream<Item = Result<((StateEventType, String), PduEvent)>> + Send + 'a {
+) -> impl Stream<Item = Result<((StateEventType, StateKey), PduEvent)>> + Send + 'a {
 	self.services
 		.state
 		.get_room_shortstatehash(room_id)

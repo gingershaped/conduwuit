@@ -3,8 +3,8 @@ use std::{collections::BTreeMap, sync::Arc};
 use conduwuit::Result;
 
 use crate::{
-	engine::descriptor::{self, CacheDisp, Descriptor},
 	Engine, Map,
+	engine::descriptor::{self, CacheDisp, Descriptor},
 };
 
 pub(super) type Maps = BTreeMap<MapsKey, MapsVal>;
@@ -169,8 +169,11 @@ pub(super) static MAPS: &[Descriptor] = &[
 	},
 	Descriptor {
 		name: "roomsynctoken_shortstatehash",
+		file_shape: 3,
 		val_size_hint: Some(8),
 		block_size: 512,
+		compression_level: 3,
+		bottommost_level: Some(6),
 		..descriptor::SEQUENTIAL
 	},
 	Descriptor {
@@ -179,6 +182,7 @@ pub(super) static MAPS: &[Descriptor] = &[
 	},
 	Descriptor {
 		name: "roomuserid_invitecount",
+		val_size_hint: Some(8),
 		..descriptor::RANDOM_SMALL
 	},
 	Descriptor {
@@ -191,10 +195,12 @@ pub(super) static MAPS: &[Descriptor] = &[
 	},
 	Descriptor {
 		name: "roomuserid_leftcount",
+		val_size_hint: Some(8),
 		..descriptor::RANDOM
 	},
 	Descriptor {
 		name: "roomuserid_knockedcount",
+		val_size_hint: Some(8),
 		..descriptor::RANDOM_SMALL
 	},
 	Descriptor {

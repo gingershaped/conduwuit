@@ -1,25 +1,24 @@
 use std::{collections::BTreeMap, mem, sync::Arc};
 
 use conduwuit::{
-	at, debug_warn, err, trace,
-	utils::{self, stream::TryIgnore, string::Unquoted, ReadyExt},
-	Err, Error, Result, Server,
+	Err, Error, Result, Server, at, debug_warn, err, trace,
+	utils::{self, ReadyExt, stream::TryIgnore, string::Unquoted},
 };
 use database::{Deserialized, Ignore, Interfix, Json, Map};
 use futures::{Stream, StreamExt, TryFutureExt};
 use ruma::{
+	DeviceId, KeyId, MilliSecondsSinceUnixEpoch, OneTimeKeyAlgorithm, OneTimeKeyId,
+	OneTimeKeyName, OwnedDeviceId, OwnedKeyId, OwnedMxcUri, OwnedUserId, RoomId, UInt, UserId,
 	api::client::{device::Device, error::ErrorKind, filter::FilterDefinition},
 	encryption::{CrossSigningKey, DeviceKeys, OneTimeKey},
 	events::{
-		ignored_user_list::IgnoredUserListEvent, AnyToDeviceEvent, GlobalAccountDataEventType,
+		AnyToDeviceEvent, GlobalAccountDataEventType, ignored_user_list::IgnoredUserListEvent,
 	},
 	serde::Raw,
-	DeviceId, KeyId, MilliSecondsSinceUnixEpoch, OneTimeKeyAlgorithm, OneTimeKeyId,
-	OneTimeKeyName, OwnedDeviceId, OwnedKeyId, OwnedMxcUri, OwnedUserId, RoomId, UInt, UserId,
 };
 use serde_json::json;
 
-use crate::{account_data, admin, globals, rooms, Dep};
+use crate::{Dep, account_data, admin, globals, rooms};
 
 pub struct Service {
 	services: Services,
@@ -246,10 +245,13 @@ impl Service {
 
 	/// Sets a new avatar_url or removes it if avatar_url is None.
 	pub fn set_avatar_url(&self, user_id: &UserId, avatar_url: Option<OwnedMxcUri>) {
-		if let Some(avatar_url) = avatar_url {
-			self.db.userid_avatarurl.insert(user_id, &avatar_url);
-		} else {
-			self.db.userid_avatarurl.remove(user_id);
+		match avatar_url {
+			| Some(avatar_url) => {
+				self.db.userid_avatarurl.insert(user_id, &avatar_url);
+			},
+			| _ => {
+				self.db.userid_avatarurl.remove(user_id);
+			},
 		}
 	}
 
@@ -276,11 +278,9 @@ impl Service {
 		initial_device_display_name: Option<String>,
 		client_ip: Option<String>,
 	) -> Result<()> {
-		// This method should never be called for nonexistent users. We shouldn't assert
-		// though...
 		if !self.exists(user_id).await {
 			return Err!(Request(InvalidParam(error!(
-				"Called create_device for non-existent {user_id}"
+				"Called create_device for non-existent user {user_id}"
 			))));
 		}
 
@@ -514,7 +514,7 @@ impl Service {
 	pub async fn add_cross_signing_keys(
 		&self,
 		user_id: &UserId,
-		master_key: &Raw<CrossSigningKey>,
+		master_key: &Option<Raw<CrossSigningKey>>,
 		self_signing_key: &Option<Raw<CrossSigningKey>>,
 		user_signing_key: &Option<Raw<CrossSigningKey>>,
 		notify: bool,
@@ -523,15 +523,17 @@ impl Service {
 		let mut prefix = user_id.as_bytes().to_vec();
 		prefix.push(0xFF);
 
-		let (master_key_key, _) = parse_master_key(user_id, master_key)?;
+		if let Some(master_key) = master_key {
+			let (master_key_key, _) = parse_master_key(user_id, master_key)?;
 
-		self.db
-			.keyid_key
-			.insert(&master_key_key, master_key.json().get().as_bytes());
+			self.db
+				.keyid_key
+				.insert(&master_key_key, master_key.json().get().as_bytes());
 
-		self.db
-			.userid_masterkeyid
-			.insert(user_id.as_bytes(), &master_key_key);
+			self.db
+				.userid_masterkeyid
+				.insert(user_id.as_bytes(), &master_key_key);
+		}
 
 		// Self-signing key
 		if let Some(self_signing_key) = self_signing_key {
@@ -567,32 +569,16 @@ impl Service {
 
 		// User-signing key
 		if let Some(user_signing_key) = user_signing_key {
-			let mut user_signing_key_ids = user_signing_key
-				.deserialize()
-				.map_err(|_| err!(Request(InvalidParam("Invalid user signing key"))))?
-				.keys
-				.into_values();
+			let user_signing_key_id = parse_user_signing_key(user_signing_key)?;
 
-			let user_signing_key_id = user_signing_key_ids
-				.next()
-				.ok_or(err!(Request(InvalidParam("User signing key contained no key."))))?;
-
-			if user_signing_key_ids.next().is_some() {
-				return Err!(Request(InvalidParam(
-					"User signing key contained more than one key."
-				)));
-			}
-
-			let mut user_signing_key_key = prefix;
-			user_signing_key_key.extend_from_slice(user_signing_key_id.as_bytes());
-
+			let user_signing_key_key = (user_id, &user_signing_key_id);
 			self.db
 				.keyid_key
-				.insert(&user_signing_key_key, user_signing_key.json().get().as_bytes());
+				.put_raw(user_signing_key_key, user_signing_key.json().get().as_bytes());
 
 			self.db
 				.userid_usersigningkeyid
-				.insert(user_id.as_bytes(), &user_signing_key_key);
+				.put(user_id, user_signing_key_key);
 		}
 
 		if notify {
@@ -1077,6 +1063,24 @@ pub fn parse_master_key(
 	let mut master_key_key = prefix.clone();
 	master_key_key.extend_from_slice(master_key_id.as_bytes());
 	Ok((master_key_key, master_key))
+}
+
+pub fn parse_user_signing_key(user_signing_key: &Raw<CrossSigningKey>) -> Result<String> {
+	let mut user_signing_key_ids = user_signing_key
+		.deserialize()
+		.map_err(|_| err!(Request(InvalidParam("Invalid user signing key"))))?
+		.keys
+		.into_values();
+
+	let user_signing_key_id = user_signing_key_ids
+		.next()
+		.ok_or(err!(Request(InvalidParam("User signing key contained no key."))))?;
+
+	if user_signing_key_ids.next().is_some() {
+		return Err!(Request(InvalidParam("User signing key contained more than one key.")));
+	}
+
+	Ok(user_signing_key_id)
 }
 
 /// Ensure that a user only sees signatures from themselves and the target user

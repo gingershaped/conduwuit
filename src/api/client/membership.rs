@@ -9,51 +9,51 @@ use std::{
 use axum::extract::State;
 use axum_client_ip::InsecureClientIp;
 use conduwuit::{
-	at, debug, debug_info, debug_warn, err, info,
-	pdu::{gen_event_id_canonical_json, PduBuilder},
-	result::FlatOk,
-	trace,
-	utils::{self, shuffle, IterStream, ReadyExt},
-	warn, Err, PduEvent, Result,
+	Err, PduEvent, Result, StateKey, at, debug, debug_info, debug_warn, err, error, info,
+	pdu::{PduBuilder, gen_event_id_canonical_json},
+	result::{FlatOk, NotFound},
+	state_res, trace,
+	utils::{self, IterStream, ReadyExt, shuffle},
+	warn,
 };
-use futures::{join, FutureExt, StreamExt, TryFutureExt};
+use futures::{FutureExt, StreamExt, TryFutureExt, future::join4, join};
 use ruma::{
+	CanonicalJsonObject, CanonicalJsonValue, OwnedEventId, OwnedRoomId, OwnedServerName,
+	OwnedUserId, RoomId, RoomVersionId, ServerName, UserId,
 	api::{
 		client::{
 			error::ErrorKind,
 			knock::knock_room,
 			membership::{
-				ban_user, forget_room, get_member_events, invite_user, join_room_by_id,
-				join_room_by_id_or_alias,
+				ThirdPartySigned, ban_user, forget_room, get_member_events, invite_user,
+				join_room_by_id, join_room_by_id_or_alias,
 				joined_members::{self, v3::RoomMember},
-				joined_rooms, kick_user, leave_room, unban_user, ThirdPartySigned,
+				joined_rooms, kick_user, leave_room, unban_user,
 			},
 		},
 		federation::{self, membership::create_invite},
 	},
 	canonical_json::to_canonical_value,
 	events::{
+		StateEventType,
 		room::{
 			join_rules::{AllowRule, JoinRule, RoomJoinRulesEventContent},
 			member::{MembershipState, RoomMemberEventContent},
 			message::RoomMessageEventContent,
 		},
-		StateEventType,
 	},
-	state_res, CanonicalJsonObject, CanonicalJsonValue, OwnedEventId, OwnedRoomId,
-	OwnedServerName, OwnedUserId, RoomId, RoomVersionId, ServerName, UserId,
 };
 use service::{
+	Services,
 	appservice::RegistrationInfo,
 	pdu::gen_event_id,
 	rooms::{
 		state::RoomMutexGuard,
 		state_compressor::{CompressedState, HashSetCompressStateEvent},
 	},
-	Services,
 };
 
-use crate::{client::full_user_deactivate, Ruma};
+use crate::{Ruma, client::full_user_deactivate};
 
 /// Checks if the room is banned in any way possible and the sender user is not
 /// an admin.
@@ -507,43 +507,52 @@ pub(crate) async fn invite_user_route(
 	)
 	.await?;
 
-	if let invite_user::v3::InvitationRecipient::UserId { user_id } = &body.recipient {
-		let sender_ignored_recipient = services.users.user_is_ignored(sender_user, user_id);
-		let recipient_ignored_by_sender = services.users.user_is_ignored(user_id, sender_user);
+	match &body.recipient {
+		| invite_user::v3::InvitationRecipient::UserId { user_id } => {
+			let sender_ignored_recipient = services.users.user_is_ignored(sender_user, user_id);
+			let recipient_ignored_by_sender =
+				services.users.user_is_ignored(user_id, sender_user);
 
-		let (sender_ignored_recipient, recipient_ignored_by_sender) =
-			join!(sender_ignored_recipient, recipient_ignored_by_sender);
+			let (sender_ignored_recipient, recipient_ignored_by_sender) =
+				join!(sender_ignored_recipient, recipient_ignored_by_sender);
 
-		if sender_ignored_recipient {
-			return Err!(Request(Forbidden(
-				"You cannot invite users you have ignored to rooms."
-			)));
-		}
-
-		if let Ok(target_user_membership) = services
-			.rooms
-			.state_accessor
-			.get_member(&body.room_id, user_id)
-			.await
-		{
-			if target_user_membership.membership == MembershipState::Ban {
-				return Err!(Request(Forbidden("User is banned from this room.")));
+			if sender_ignored_recipient {
+				return Ok(invite_user::v3::Response {});
 			}
-		}
 
-		if recipient_ignored_by_sender {
-			// silently drop the invite to the recipient if they've been ignored by the
-			// sender, pretend it worked
-			return Ok(invite_user::v3::Response {});
-		}
+			if let Ok(target_user_membership) = services
+				.rooms
+				.state_accessor
+				.get_member(&body.room_id, user_id)
+				.await
+			{
+				if target_user_membership.membership == MembershipState::Ban {
+					return Err!(Request(Forbidden("User is banned from this room.")));
+				}
+			}
 
-		invite_helper(&services, sender_user, user_id, &body.room_id, body.reason.clone(), false)
+			if recipient_ignored_by_sender {
+				// silently drop the invite to the recipient if they've been ignored by the
+				// sender, pretend it worked
+				return Ok(invite_user::v3::Response {});
+			}
+
+			invite_helper(
+				&services,
+				sender_user,
+				user_id,
+				&body.room_id,
+				body.reason.clone(),
+				false,
+			)
 			.boxed()
 			.await?;
 
-		Ok(invite_user::v3::Response {})
-	} else {
-		Err!(Request(NotFound("User not found.")))
+			Ok(invite_user::v3::Response {})
+		},
+		| _ => {
+			Err!(Request(NotFound("User not found.")))
+		},
 	}
 }
 
@@ -706,21 +715,37 @@ pub(crate) async fn forget_room_route(
 	State(services): State<crate::State>,
 	body: Ruma<forget_room::v3::Request>,
 ) -> Result<forget_room::v3::Response> {
-	let sender_user = body.sender_user();
+	let user_id = body.sender_user();
+	let room_id = &body.room_id;
 
-	if services
-		.rooms
-		.state_cache
-		.is_joined(sender_user, &body.room_id)
-		.await
-	{
+	let joined = services.rooms.state_cache.is_joined(user_id, room_id);
+	let knocked = services.rooms.state_cache.is_knocked(user_id, room_id);
+	let left = services.rooms.state_cache.is_left(user_id, room_id);
+	let invited = services.rooms.state_cache.is_invited(user_id, room_id);
+
+	let (joined, knocked, left, invited) = join4(joined, knocked, left, invited).await;
+
+	if joined || knocked || invited {
 		return Err!(Request(Unknown("You must leave the room before forgetting it")));
 	}
 
-	services
+	let membership = services
 		.rooms
-		.state_cache
-		.forget(&body.room_id, sender_user);
+		.state_accessor
+		.get_member(room_id, user_id)
+		.await;
+
+	if membership.is_not_found() {
+		return Err!(Request(Unknown("No membership event was found, room was never joined")));
+	}
+
+	if left
+		|| membership.is_ok_and(|member| {
+			member.membership == MembershipState::Leave
+				|| member.membership == MembershipState::Ban
+		}) {
+		services.rooms.state_cache.forget(room_id, user_id);
+	}
 
 	Ok(forget_room::v3::Response::new())
 }
@@ -982,7 +1007,7 @@ async fn join_room_by_id_helper_remote(
 		| _ => {
 			join_event_stub.remove("event_id");
 		},
-	};
+	}
 
 	// In order to create a compatible ref hash (EventID) the `hashes` field needs
 	// to be present
@@ -1011,10 +1036,17 @@ async fn join_room_by_id_helper_remote(
 			.await,
 	};
 
-	let send_join_response = services
+	let send_join_response = match services
 		.sending
 		.send_synapse_request(&remote_server, send_join_request)
-		.await?;
+		.await
+	{
+		| Ok(response) => response,
+		| Err(e) => {
+			error!("send_join failed: {e}");
+			return Err(e);
+		},
+	};
 
 	info!("send_join finished");
 
@@ -1151,8 +1183,8 @@ async fn join_room_by_id_helper_remote(
 
 	debug!("Running send_join auth check");
 	let fetch_state = &state;
-	let state_fetch = |k: &'static StateEventType, s: String| async move {
-		let shortstatekey = services.rooms.short.get_shortstatekey(k, &s).await.ok()?;
+	let state_fetch = |k: StateEventType, s: StateKey| async move {
+		let shortstatekey = services.rooms.short.get_shortstatekey(&k, &s).await.ok()?;
 
 		let event_id = fetch_state.get(&shortstatekey)?;
 		services.rooms.timeline.get_pdu(event_id).await.ok()
@@ -1162,7 +1194,7 @@ async fn join_room_by_id_helper_remote(
 		&state_res::RoomVersion::new(&room_version_id)?,
 		&parsed_join_pdu,
 		None, // TODO: third party invite
-		|k, s| state_fetch(k, s.to_owned()),
+		|k, s| state_fetch(k.clone(), s.into()),
 	)
 	.await
 	.map_err(|e| err!(Request(Forbidden(warn!("Auth check failed: {e:?}")))))?;
@@ -1402,7 +1434,7 @@ async fn join_room_by_id_helper_local(
 		| _ => {
 			join_event_stub.remove("event_id");
 		},
-	};
+	}
 
 	// In order to create a compatible ref hash (EventID) the `hashes` field needs
 	// to be present
@@ -1823,38 +1855,46 @@ async fn remote_leave_room(
 		.collect()
 		.await;
 
-	if let Ok(invite_state) = services
+	match services
 		.rooms
 		.state_cache
 		.invite_state(user_id, room_id)
 		.await
 	{
-		servers.extend(
-			invite_state
-				.iter()
-				.filter_map(|event| event.get_field("sender").ok().flatten())
-				.filter_map(|sender: &str| UserId::parse(sender).ok())
-				.map(|user| user.server_name().to_owned()),
-		);
-	} else if let Ok(knock_state) = services
-		.rooms
-		.state_cache
-		.knock_state(user_id, room_id)
-		.await
-	{
-		servers.extend(
-			knock_state
-				.iter()
-				.filter_map(|event| event.get_field("sender").ok().flatten())
-				.filter_map(|sender: &str| UserId::parse(sender).ok())
-				.filter_map(|sender| {
-					if !services.globals.user_is_local(sender) {
-						Some(sender.server_name().to_owned())
-					} else {
-						None
-					}
-				}),
-		);
+		| Ok(invite_state) => {
+			servers.extend(
+				invite_state
+					.iter()
+					.filter_map(|event| event.get_field("sender").ok().flatten())
+					.filter_map(|sender: &str| UserId::parse(sender).ok())
+					.map(|user| user.server_name().to_owned()),
+			);
+		},
+		| _ => {
+			match services
+				.rooms
+				.state_cache
+				.knock_state(user_id, room_id)
+				.await
+			{
+				| Ok(knock_state) => {
+					servers.extend(
+						knock_state
+							.iter()
+							.filter_map(|event| event.get_field("sender").ok().flatten())
+							.filter_map(|sender: &str| UserId::parse(sender).ok())
+							.filter_map(|sender| {
+								if !services.globals.user_is_local(sender) {
+									Some(sender.server_name().to_owned())
+								} else {
+									None
+								}
+							}),
+					);
+				},
+				| _ => {},
+			}
+		},
 	}
 
 	if let Some(room_id_server_name) = room_id.server_name() {
@@ -1921,7 +1961,7 @@ async fn remote_leave_room(
 		| _ => {
 			leave_event_stub.remove("event_id");
 		},
-	};
+	}
 
 	// In order to create a compatible ref hash (EventID) the `hashes` field needs
 	// to be present

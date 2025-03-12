@@ -11,18 +11,18 @@ use std::{
 
 use async_trait::async_trait;
 use conduwuit::{
-	debug, err, error, error::default_log, pdu::PduBuilder, Error, PduEvent, Result, Server,
+	Error, PduEvent, Result, Server, debug, err, error, error::default_log, pdu::PduBuilder,
 };
 pub use create::create_admin_room;
 use futures::{FutureExt, TryFutureExt};
 use loole::{Receiver, Sender};
 use ruma::{
-	events::room::message::{Relation, RoomMessageEventContent},
 	OwnedEventId, OwnedRoomId, RoomId, UserId,
+	events::room::message::{Relation, RoomMessageEventContent},
 };
 use tokio::sync::RwLock;
 
-use crate::{account_data, globals, rooms, rooms::state::RoomMutexGuard, Dep};
+use crate::{Dep, account_data, globals, rooms, rooms::state::RoomMutexGuard};
 
 pub struct Service {
 	services: Services,
@@ -40,6 +40,7 @@ struct Services {
 	timeline: Dep<rooms::timeline::Service>,
 	state: Dep<rooms::state::Service>,
 	state_cache: Dep<rooms::state_cache::Service>,
+	state_accessor: Dep<rooms::state_accessor::Service>,
 	account_data: Dep<account_data::Service>,
 	services: StdRwLock<Option<Weak<crate::Services>>>,
 }
@@ -85,6 +86,8 @@ impl crate::Service for Service {
 				timeline: args.depend::<rooms::timeline::Service>("rooms::timeline"),
 				state: args.depend::<rooms::state::Service>("rooms::state"),
 				state_cache: args.depend::<rooms::state_cache::Service>("rooms::state_cache"),
+				state_accessor: args
+					.depend::<rooms::state_accessor::Service>("rooms::state_accessor"),
 				account_data: args.depend::<account_data::Service>("account_data"),
 				services: None.into(),
 			},
@@ -357,8 +360,8 @@ impl Service {
 		}
 
 		// This will evaluate to false if the emergency password is set up so that
-		// the administrator can execute commands as conduit
-		let emergency_password_set = self.services.globals.emergency_password().is_some();
+		// the administrator can execute commands as the server user
+		let emergency_password_set = self.services.server.config.emergency_password.is_some();
 		let from_server = pdu.sender == *server_user && !emergency_password_set;
 		if from_server && self.is_admin_room(&pdu.room_id).await {
 			return false;

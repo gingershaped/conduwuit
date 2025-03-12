@@ -1,15 +1,13 @@
-#![cfg(test)]
-
 use std::str::FromStr;
 
 use ruma::{
+	UInt,
 	api::federation::space::{SpaceHierarchyParentSummary, SpaceHierarchyParentSummaryInit},
 	owned_room_id, owned_server_name,
 	space::SpaceRoomJoinRule,
-	UInt,
 };
 
-use crate::rooms::spaces::{get_parent_children_via, PaginationToken};
+use crate::rooms::spaces::{PaginationToken, get_parent_children_via};
 
 #[test]
 fn get_summary_children() {
@@ -69,15 +67,22 @@ fn get_summary_children() {
 	}
 	.into();
 
-	assert_eq!(get_parent_children_via(&summary, false), vec![
-		(owned_room_id!("!foo:example.org"), vec![owned_server_name!("example.org")]),
-		(owned_room_id!("!bar:example.org"), vec![owned_server_name!("example.org")]),
-		(owned_room_id!("!baz:example.org"), vec![owned_server_name!("example.org")])
-	]);
-	assert_eq!(get_parent_children_via(&summary, true), vec![(
-		owned_room_id!("!bar:example.org"),
-		vec![owned_server_name!("example.org")]
-	)]);
+	assert_eq!(
+		get_parent_children_via(&summary, false)
+			.map(|(k, v)| (k, v.collect::<Vec<_>>()))
+			.collect::<Vec<_>>(),
+		vec![
+			(owned_room_id!("!foo:example.org"), vec![owned_server_name!("example.org")]),
+			(owned_room_id!("!bar:example.org"), vec![owned_server_name!("example.org")]),
+			(owned_room_id!("!baz:example.org"), vec![owned_server_name!("example.org")])
+		]
+	);
+	assert_eq!(
+		get_parent_children_via(&summary, true)
+			.map(|(k, v)| (k, v.collect::<Vec<_>>()))
+			.collect::<Vec<_>>(),
+		vec![(owned_room_id!("!bar:example.org"), vec![owned_server_name!("example.org")])]
+	);
 }
 
 #[test]

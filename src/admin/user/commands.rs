@@ -2,23 +2,23 @@ use std::{collections::BTreeMap, fmt::Write as _};
 
 use api::client::{full_user_deactivate, join_room_by_id_helper, leave_room};
 use conduwuit::{
-	debug_warn, error, info, is_equal_to,
+	PduBuilder, Result, debug, debug_warn, error, info, is_equal_to,
 	utils::{self, ReadyExt},
-	warn, PduBuilder, Result,
+	warn,
 };
 use conduwuit_api::client::{leave_all_rooms, update_avatar_url, update_displayname};
 use futures::StreamExt;
 use ruma::{
+	EventId, OwnedRoomId, OwnedRoomOrAliasId, OwnedUserId, RoomId, UserId,
 	events::{
+		RoomAccountDataEventType, StateEventType,
 		room::{
 			message::RoomMessageEventContent,
 			power_levels::{RoomPowerLevels, RoomPowerLevelsEventContent},
 			redaction::RoomRedactionEventContent,
 		},
 		tag::{TagEvent, TagEventContent, TagInfo},
-		RoomAccountDataEventType, StateEventType,
 	},
-	EventId, OwnedRoomId, OwnedRoomOrAliasId, OwnedUserId, RoomId, UserId,
 };
 
 use crate::{
@@ -57,16 +57,16 @@ pub(super) async fn create_user(
 	// Validate user id
 	let user_id = parse_local_user_id(self.services, &username)?;
 
-	if self.services.users.exists(&user_id).await {
-		return Ok(RoomMessageEventContent::text_plain(format!(
-			"Userid {user_id} already exists"
-		)));
+	if let Err(e) = user_id.validate_strict() {
+		if self.services.config.emergency_password.is_none() {
+			return Ok(RoomMessageEventContent::text_plain(format!(
+				"Username {user_id} contains disallowed characters or spaces: {e}"
+			)));
+		}
 	}
 
-	if user_id.is_historical() {
-		return Ok(RoomMessageEventContent::text_plain(format!(
-			"User ID {user_id} does not conform to new Matrix identifier spec"
-		)));
+	if self.services.users.exists(&user_id).await {
+		return Ok(RoomMessageEventContent::text_plain(format!("User {user_id} already exists")));
 	}
 
 	let password = password.unwrap_or_else(|| utils::random_string(AUTO_GEN_PASSWORD_LENGTH));
@@ -166,7 +166,7 @@ pub(super) async fn create_user(
 							"Failed to automatically join room {room} for user {user_id}: {e}"
 						);
 					},
-				};
+				}
 			}
 		}
 	}
@@ -185,12 +185,12 @@ pub(super) async fn create_user(
 			.is_ok_and(is_equal_to!(1))
 		{
 			self.services.admin.make_user_admin(&user_id).await?;
-
 			warn!("Granting {user_id} admin privileges as the first user");
 		}
+	} else {
+		debug!("create_user admin command called without an admin room being available");
 	}
 
-	// Inhibit login does not work for guests
 	Ok(RoomMessageEventContent::text_plain(format!(
 		"Created user with user_id: {user_id} and password: `{password}`"
 	)))
@@ -550,7 +550,7 @@ pub(super) async fn force_join_list_of_local_users(
 				debug_warn!("Failed force joining {user_id} to {room_id} during bulk join: {e}");
 				failed_joins = failed_joins.saturating_add(1);
 			},
-		};
+		}
 	}
 
 	Ok(RoomMessageEventContent::notice_markdown(format!(
@@ -646,7 +646,7 @@ pub(super) async fn force_join_all_local_users(
 				debug_warn!("Failed force joining {user_id} to {room_id} during bulk join: {e}");
 				failed_joins = failed_joins.saturating_add(1);
 			},
-		};
+		}
 	}
 
 	Ok(RoomMessageEventContent::notice_markdown(format!(
@@ -694,6 +694,19 @@ pub(super) async fn force_leave_room(
 		self.services.globals.user_is_local(&user_id),
 		"Parsed user_id must be a local user"
 	);
+
+	if !self
+		.services
+		.rooms
+		.state_cache
+		.is_joined(&user_id, &room_id)
+		.await
+	{
+		return Ok(RoomMessageEventContent::notice_markdown(format!(
+			"{user_id} is not joined in the room"
+		)));
+	}
+
 	leave_room(self.services, &user_id, &room_id, None).await?;
 
 	Ok(RoomMessageEventContent::notice_markdown(format!(

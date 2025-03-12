@@ -1,14 +1,14 @@
 use std::collections::BTreeMap;
 
 use axum::extract::State;
-use conduwuit::{err, Err, PduCount};
+use conduwuit::{Err, PduCount, err};
 use ruma::{
+	MilliSecondsSinceUnixEpoch,
 	api::client::{read_marker::set_read_marker, receipt::create_receipt},
 	events::{
-		receipt::{ReceiptThread, ReceiptType},
 		RoomAccountDataEventType,
+		receipt::{ReceiptThread, ReceiptType},
 	},
-	MilliSecondsSinceUnixEpoch,
 };
 
 use crate::{Result, Ruma};
@@ -197,11 +197,12 @@ pub(crate) async fn create_receipt_route(
 				.read_receipt
 				.private_read_set(&body.room_id, sender_user, count);
 		},
-		| _ =>
+		| _ => {
 			return Err!(Request(InvalidParam(warn!(
 				"Received unknown read receipt type: {}",
 				&body.receipt_type
-			)))),
+			))));
+		},
 	}
 
 	Ok(create_receipt::v3::Response {})

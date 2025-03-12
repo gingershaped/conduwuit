@@ -2,15 +2,17 @@ use std::collections::BTreeMap;
 
 use axum::extract::State;
 use conduwuit::{
-	debug_info, debug_warn, err, error, info, pdu::PduBuilder, warn, Err, Error, Result,
+	Err, Error, Result, StateKey, debug_info, debug_warn, err, error, info, pdu::PduBuilder, warn,
 };
 use futures::FutureExt;
 use ruma::{
+	CanonicalJsonObject, Int, OwnedRoomAliasId, OwnedRoomId, OwnedUserId, RoomId, RoomVersionId,
 	api::client::{
 		error::ErrorKind,
 		room::{self, create_room},
 	},
 	events::{
+		TimelineEventType,
 		room::{
 			canonical_alias::RoomCanonicalAliasEventContent,
 			create::RoomCreateEventContent,
@@ -22,16 +24,14 @@ use ruma::{
 			power_levels::RoomPowerLevelsEventContent,
 			topic::RoomTopicEventContent,
 		},
-		TimelineEventType,
 	},
 	int,
 	serde::{JsonObject, Raw},
-	CanonicalJsonObject, Int, OwnedRoomAliasId, OwnedRoomId, OwnedUserId, RoomId, RoomVersionId,
 };
 use serde_json::{json, value::to_raw_value};
-use service::{appservice::RegistrationInfo, Services};
+use service::{Services, appservice::RegistrationInfo};
 
-use crate::{client::invite_helper, Ruma};
+use crate::{Ruma, client::invite_helper};
 
 /// # `POST /_matrix/client/v3/createRoom`
 ///
@@ -68,10 +68,9 @@ pub(crate) async fn create_room_route(
 		));
 	}
 
-	let room_id: OwnedRoomId = if let Some(custom_room_id) = &body.room_id {
-		custom_room_id_check(&services, custom_room_id)?
-	} else {
-		RoomId::new(&services.server.name)
+	let room_id: OwnedRoomId = match &body.room_id {
+		| Some(custom_room_id) => custom_room_id_check(&services, custom_room_id)?,
+		| _ => RoomId::new(&services.server.name),
 	};
 
 	// check if room ID doesn't already exist instead of erroring on auth check
@@ -114,10 +113,10 @@ pub(crate) async fn create_room_route(
 		.await;
 	let state_lock = services.rooms.state.mutex.lock(&room_id).await;
 
-	let alias: Option<OwnedRoomAliasId> = if let Some(alias) = body.room_alias_name.as_ref() {
-		Some(room_alias_check(&services, alias, body.appservice_info.as_ref()).await?)
-	} else {
-		None
+	let alias: Option<OwnedRoomAliasId> = match body.room_alias_name.as_ref() {
+		| Some(alias) =>
+			Some(room_alias_check(&services, alias, body.appservice_info.as_ref()).await?),
+		| _ => None,
 	};
 
 	let room_version = match body.room_version.clone() {
@@ -198,7 +197,7 @@ pub(crate) async fn create_room_route(
 				event_type: TimelineEventType::RoomCreate,
 				content: to_raw_value(&create_content)
 					.expect("create event content serialization"),
-				state_key: Some(String::new()),
+				state_key: Some(StateKey::new()),
 				..Default::default()
 			},
 			sender_user,
@@ -240,9 +239,7 @@ pub(crate) async fn create_room_route(
 	if preset == RoomPreset::TrustedPrivateChat {
 		for invite in &body.invite {
 			if services.users.user_is_ignored(sender_user, invite).await {
-				return Err!(Request(Forbidden(
-					"You cannot invite users you have ignored to rooms."
-				)));
+				continue;
 			} else if services.users.user_is_ignored(invite, sender_user).await {
 				// silently drop the invite to the recipient if they've been ignored by the
 				// sender, pretend it worked
@@ -267,7 +264,7 @@ pub(crate) async fn create_room_route(
 				event_type: TimelineEventType::RoomPowerLevels,
 				content: to_raw_value(&power_levels_content)
 					.expect("serialized power_levels event content"),
-				state_key: Some(String::new()),
+				state_key: Some(StateKey::new()),
 				..Default::default()
 			},
 			sender_user,
@@ -371,7 +368,7 @@ pub(crate) async fn create_room_route(
 		}
 
 		// Implicit state key defaults to ""
-		pdu_builder.state_key.get_or_insert_with(String::new);
+		pdu_builder.state_key.get_or_insert_with(StateKey::new);
 
 		// Silently skip encryption events if they are not allowed
 		if pdu_builder.event_type == TimelineEventType::RoomEncryption
@@ -421,9 +418,7 @@ pub(crate) async fn create_room_route(
 	drop(state_lock);
 	for user_id in &body.invite {
 		if services.users.user_is_ignored(sender_user, user_id).await {
-			return Err!(Request(Forbidden(
-				"You cannot invite users you have ignored to rooms."
-			)));
+			continue;
 		} else if services.users.user_is_ignored(user_id, sender_user).await {
 			// silently drop the invite to the recipient if they've been ignored by the
 			// sender, pretend it worked

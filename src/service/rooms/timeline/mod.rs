@@ -10,21 +10,25 @@ use std::{
 };
 
 use conduwuit::{
-	at, debug, debug_warn, err, error, implement, info,
-	pdu::{gen_event_id, EventHash, PduBuilder, PduCount, PduEvent},
+	Err, Error, Result, Server, at, debug, debug_warn, err, error, implement, info,
+	pdu::{EventHash, PduBuilder, PduCount, PduEvent, gen_event_id},
+	state_res::{self, Event, RoomVersion},
 	utils::{
-		self, future::TryExtExt, stream::TryIgnore, IterStream, MutexMap, MutexMapGuard, ReadyExt,
+		self, IterStream, MutexMap, MutexMapGuard, ReadyExt, future::TryExtExt, stream::TryIgnore,
 	},
-	validated, warn, Err, Error, Result, Server,
+	validated, warn,
 };
 pub use conduwuit::{PduId, RawPduId};
 use futures::{
-	future, future::ready, pin_mut, Future, FutureExt, Stream, StreamExt, TryStreamExt,
+	Future, FutureExt, Stream, StreamExt, TryStreamExt, future, future::ready, pin_mut,
 };
 use ruma::{
+	CanonicalJsonObject, CanonicalJsonValue, EventId, OwnedEventId, OwnedRoomId, OwnedServerName,
+	RoomId, RoomVersionId, ServerName, UserId,
 	api::federation,
 	canonical_json::to_canonical_value,
 	events::{
+		GlobalAccountDataEventType, StateEventType, TimelineEventType,
 		push_rules::PushRulesEvent,
 		room::{
 			create::RoomCreateEventContent,
@@ -33,24 +37,21 @@ use ruma::{
 			power_levels::RoomPowerLevelsEventContent,
 			redaction::RoomRedactionEventContent,
 		},
-		GlobalAccountDataEventType, StateEventType, TimelineEventType,
 	},
 	push::{Action, Ruleset, Tweak},
-	state_res::{self, Event, RoomVersion},
-	uint, CanonicalJsonObject, CanonicalJsonValue, EventId, OwnedEventId, OwnedRoomId,
-	OwnedServerName, OwnedUserId, RoomId, RoomVersionId, ServerName, UserId,
+	uint,
 };
 use serde::Deserialize;
-use serde_json::value::{to_raw_value, RawValue as RawJsonValue};
+use serde_json::value::{RawValue as RawJsonValue, to_raw_value};
 
 use self::data::Data;
 pub use self::data::PdusIterItem;
 use crate::{
-	account_data, admin, appservice,
+	Dep, account_data, admin, appservice,
 	appservice::NamespaceRegex,
 	globals, pusher, rooms,
 	rooms::{short::ShortRoomId, state_compressor::CompressedState},
-	sending, server_keys, users, Dep,
+	sending, server_keys, users,
 };
 
 // Update Relationships
@@ -343,7 +344,7 @@ impl Service {
 
 		let insert_lock = self.mutex_insert.lock(&pdu.room_id).await;
 
-		let count1 = self.services.globals.next_count()?;
+		let count1 = self.services.globals.next_count().unwrap();
 		// Mark as read first so the sending client doesn't get a notification even if
 		// appending fails
 		self.services
@@ -361,13 +362,12 @@ impl Service {
 
 		drop(insert_lock);
 
-		// See if the event matches any known pushers
+		// See if the event matches any known pushers via power level
 		let power_levels: RoomPowerLevelsEventContent = self
 			.services
 			.state_accessor
 			.room_state_get_content(&pdu.room_id, &StateEventType::RoomPowerLevels, "")
 			.await
-			.map_err(|_| err!(Database("invalid m.room.power_levels event")))
 			.unwrap_or_default();
 
 		let sync_pdu = pdu.to_sync_room_event();
@@ -376,9 +376,10 @@ impl Service {
 			.services
 			.state_cache
 			.active_local_users_in_room(&pdu.room_id)
-			// Don't notify the sender of their own events
-			.ready_filter(|user| user != &pdu.sender)
 			.map(ToOwned::to_owned)
+			// Don't notify the sender of their own events, and dont send from ignored users
+			.ready_filter(|user| *user != pdu.sender)
+			.filter_map(|recipient_user| async move { (!self.services.users.user_is_ignored(&pdu.sender, &recipient_user).await).then_some(recipient_user) })
 			.collect()
 			.await;
 
@@ -387,10 +388,10 @@ impl Service {
 
 		if pdu.kind == TimelineEventType::RoomMember {
 			if let Some(state_key) = &pdu.state_key {
-				let target_user_id = OwnedUserId::parse(state_key)?;
+				let target_user_id = UserId::parse(state_key)?;
 
-				if self.services.users.is_active_local(&target_user_id).await {
-					push_target.insert(target_user_id);
+				if self.services.users.is_active_local(target_user_id).await {
+					push_target.insert(target_user_id.to_owned());
 				}
 			}
 		}
@@ -421,7 +422,7 @@ impl Service {
 						highlight = true;
 					},
 					| _ => {},
-				};
+				}
 
 				// Break early if both conditions are true
 				if notify && highlight {
@@ -483,7 +484,7 @@ impl Service {
 							}
 						}
 					},
-				};
+				}
 			},
 			| TimelineEventType::SpaceChild =>
 				if let Some(_state_key) = &pdu.state_key {
@@ -747,7 +748,7 @@ impl Service {
 		};
 
 		let auth_fetch = |k: &StateEventType, s: &str| {
-			let key = (k.clone(), s.to_owned());
+			let key = (k.clone(), s.into());
 			ready(auth_events.get(&key))
 		};
 
@@ -775,7 +776,7 @@ impl Service {
 			| _ => {
 				pdu_json.remove("event_id");
 			},
-		};
+		}
 
 		// Add origin because synapse likes that (and it's required in the spec)
 		pdu_json.insert(
@@ -846,7 +847,7 @@ impl Service {
 						{
 							return Err!(Request(Forbidden("User cannot redact this event.")));
 						}
-					};
+					}
 				},
 				| _ => {
 					let content: RoomRedactionEventContent = pdu.get_content()?;
@@ -862,7 +863,7 @@ impl Service {
 					}
 				},
 			}
-		};
+		}
 
 		if pdu.kind == TimelineEventType::RoomMember {
 			let content: RoomMemberEventContent = pdu.get_content()?;
@@ -1292,10 +1293,10 @@ async fn check_pdu_for_admin_room(&self, pdu: &PduEvent, sender: &UserId) -> Res
 					}
 				},
 				| _ => {},
-			};
+			}
 		},
 		| _ => {},
-	};
+	}
 
 	Ok(())
 }

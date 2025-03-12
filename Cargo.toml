@@ -13,14 +13,14 @@ authors = [
 ]
 categories = ["network-programming"]
 description = "a very cool Matrix chat homeserver written in Rust"
-edition = "2021"
+edition = "2024"
 homepage = "https://conduwuit.puppyirl.gay/"
 keywords = ["chat", "matrix", "networking", "server", "uwu"]
 license = "Apache-2.0"
 # See also `rust-toolchain.toml`
 readme = "README.md"
 repository = "https://github.com/girlbossceo/conduwuit"
-rust-version = "1.84.0"
+rust-version = "1.85.0"
 version = "0.5.0"
 
 [workspace.metadata.crane]
@@ -39,6 +39,10 @@ features = [
 	"union",
 	"write",
 ]
+
+[workspace.dependencies.smallstr]
+version = "0.3"
+features = ["ffi", "std", "union"]
 
 [workspace.dependencies.const-str]
 version = "0.5.7"
@@ -206,7 +210,7 @@ default-features = false
 version = "0.1.41"
 default-features = false
 [workspace.dependencies.tracing-subscriber]
-version = "=0.3.18"
+version = "0.3.19"
 default-features = false
 features = ["env-filter", "std", "tracing", "tracing-log", "ansi", "fmt"]
 [workspace.dependencies.tracing-core]
@@ -342,7 +346,7 @@ version = "0.1.2"
 [workspace.dependencies.ruma]
 git = "https://github.com/girlbossceo/ruwuma"
 #branch = "conduwuit-changes"
-rev = "f5667c6292adb43fbe4725d31d6b5127a0cf60ce"
+rev = "69133fd53ca063552788c8dfbaf5e01c98dec3e7"
 features = [
     "compat",
     "rand",
@@ -351,8 +355,6 @@ features = [
     "federation-api",
     "markdown",
     "push-gateway-api-c",
-    "state-res",
-    "server-util",
     "unstable-exhaustive-types",
     "ring-compat",
     "compat-upload-signatures",
@@ -369,24 +371,27 @@ features = [
     "unstable-msc3381", # polls
     "unstable-msc3489", # beacon / live location
     "unstable-msc3575",
+    "unstable-msc3930", # polls push rules
     "unstable-msc4075",
+    "unstable-msc4095",
     "unstable-msc4121",
     "unstable-msc4125",
     "unstable-msc4186",
     "unstable-msc4203", # sending to-device events to appservices 
     "unstable-msc4210", # remove legacy mentions
     "unstable-extensible-events",
+    "unstable-pdu",
 ]
 
 [workspace.dependencies.rust-rocksdb]
-path = "deps/rust-rocksdb"
-package = "rust-rocksdb-uwu"
+git = "https://github.com/girlbossceo/rust-rocksdb-zaidoon1"
+rev = "1c267e0bf0cc7b7702e9a329deccd89de79ef4c3"
+default-features = false
 features = [
 	"multi-threaded-cf",
 	"mt_static",
 	"lz4",
 	"zstd",
-	"zlib",
 	"bzip2",
 ]
 
@@ -505,7 +510,7 @@ version = "1.0.37"
 version = "1.0.89"
 
 [workspace.dependencies.bytesize]
-version = "1.3.0"
+version = "1.3.2"
 
 [workspace.dependencies.core_affinity]
 version = "0.8.1"
@@ -524,6 +529,9 @@ features = ["std"]
 version = "0.3.2"
 features = ["std"]
 
+[workspace.dependencies.maplit]
+version = "1.0.2"
+
 #
 # Patches
 #
@@ -533,16 +541,16 @@ features = ["std"]
 # https://github.com/girlbossceo/tracing/commit/b348dca742af641c47bc390261f60711c2af573c
 [patch.crates-io.tracing-subscriber]
 git = "https://github.com/girlbossceo/tracing"
-rev = "05825066a6d0e9ad6b80dcf29457eb179ff4768c"
+rev = "1e64095a8051a1adf0d1faa307f9f030889ec2aa"
 [patch.crates-io.tracing]
 git = "https://github.com/girlbossceo/tracing"
-rev = "05825066a6d0e9ad6b80dcf29457eb179ff4768c"
+rev = "1e64095a8051a1adf0d1faa307f9f030889ec2aa"
 [patch.crates-io.tracing-core]
 git = "https://github.com/girlbossceo/tracing"
-rev = "05825066a6d0e9ad6b80dcf29457eb179ff4768c"
+rev = "1e64095a8051a1adf0d1faa307f9f030889ec2aa"
 [patch.crates-io.tracing-log]
 git = "https://github.com/girlbossceo/tracing"
-rev = "05825066a6d0e9ad6b80dcf29457eb179ff4768c"
+rev = "1e64095a8051a1adf0d1faa307f9f030889ec2aa"
 
 # adds a tab completion callback: https://github.com/girlbossceo/rustyline-async/commit/de26100b0db03e419a3d8e1dd26895d170d1fe50
 # adds event for CTRL+\: https://github.com/girlbossceo/rustyline-async/commit/67d8c49aeac03a5ef4e818f663eaa94dd7bf339b
@@ -678,7 +686,7 @@ inherits = "release"
 
 # To enable hot-reloading:
 # 1. Uncomment all of the rustflags here.
-# 2. Uncomment crate-type=dylib in src/*/Cargo.toml and deps/rust-rocksdb/Cargo.toml
+# 2. Uncomment crate-type=dylib in src/*/Cargo.toml
 #
 # opt-level, mir-opt-level, validate-mir are not known to interfere with reloading
 # and can be raised if build times are tolerable.
@@ -744,27 +752,6 @@ inherits = "dev"
 #	'-Clink-arg=-Wl,--allow-shlib-undefined',
 #	'-Clink-arg=-Wl,--export-dynamic',
 #	'-Clink-arg=-Wl,-z,lazy',
-#]
-
-[profile.dev.package.rust-rocksdb-uwu]
-inherits = "dev"
-debug = 'limited'
-incremental = false
-codegen-units = 1
-opt-level = 'z'
-#rustflags = [
-#	'--cfg', 'conduwuit_mods',
-#	'-Ztls-model=initial-exec',
-#	'-Cprefer-dynamic=true',
-#	'-Zstaticlib-prefer-dynamic=true',
-#	'-Zstaticlib-allow-rdylib-deps=true',
-#	'-Zpacked-bundled-libs=true',
-#	'-Zplt=true',
-#	'-Clink-arg=-Wl,--no-as-needed',
-#	'-Clink-arg=-Wl,--allow-shlib-undefined',
-#	'-Clink-arg=-Wl,-z,lazy',
-#	'-Clink-arg=-Wl,-z,nodlopen',
-#	'-Clink-arg=-Wl,-z,nodelete',
 #]
 
 [profile.dev.package.'*']
@@ -898,6 +885,7 @@ missing_docs_in_private_items = { level = "allow", priority = 1 }
 missing_errors_doc = { level = "allow", priority = 1 }
 missing_panics_doc = { level = "allow", priority = 1 }
 module_name_repetitions = { level = "allow", priority = 1 }
+needless_continue = { level = "allow", priority = 1 }
 no_effect_underscore_binding = { level = "allow", priority = 1 }
 similar_names = { level = "allow", priority = 1 }
 single_match_else = { level = "allow", priority = 1 }
@@ -962,9 +950,13 @@ style = { level = "warn", priority = -1 }
 # trivial assertions are quite alright
 assertions_on_constants = { level = "allow", priority = 1 }
 module_inception = { level = "allow", priority = 1 }
+obfuscated_if_else = { level = "allow", priority = 1 }
 
 ###################
 suspicious = { level = "warn", priority = -1 }
 
 ## some sadness
 let_underscore_future = { level = "allow", priority = 1 }
+
+# rust doesnt understand conduwuit's custom log macros
+literal_string_with_formatting_args = { level = "allow", priority = 1 }

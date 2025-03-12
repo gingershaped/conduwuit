@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use conduwuit::{implement, Result};
+use conduwuit::{Result, implement};
 use futures::{FutureExt, Stream, StreamExt, TryFutureExt, TryStreamExt};
 use rocksdb::Direction;
 use serde::Deserialize;
@@ -40,7 +40,7 @@ pub fn rev_raw_stream(self: &Arc<Self>) -> impl Stream<Item = Result<KeyVal<'_>>
 			.into_stream()
 			.flatten()
 			.boxed();
-	};
+	}
 
 	let seek = Seek {
 		map: self.clone(),

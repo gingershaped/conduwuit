@@ -2,18 +2,20 @@ use std::collections::BTreeMap;
 
 use ruma::MilliSecondsSinceUnixEpoch;
 use serde::Deserialize;
-use serde_json::value::{to_raw_value, RawValue as RawJsonValue, Value as JsonValue};
+use serde_json::value::{RawValue as RawJsonValue, Value as JsonValue, to_raw_value};
 
 use super::Pdu;
-use crate::{err, implement, is_true, Result};
+use crate::{Result, err, implement, is_true};
 
 #[implement(Pdu)]
 pub fn remove_transaction_id(&mut self) -> Result {
+	use BTreeMap as Map;
+
 	let Some(unsigned) = &self.unsigned else {
 		return Ok(());
 	};
 
-	let mut unsigned: BTreeMap<String, Box<RawJsonValue>> = serde_json::from_str(unsigned.get())
+	let mut unsigned: Map<&str, Box<RawJsonValue>> = serde_json::from_str(unsigned.get())
 		.map_err(|e| err!(Database("Invalid unsigned in pdu event: {e}")))?;
 
 	unsigned.remove("transaction_id");
@@ -26,10 +28,13 @@ pub fn remove_transaction_id(&mut self) -> Result {
 
 #[implement(Pdu)]
 pub fn add_age(&mut self) -> Result {
-	let mut unsigned: BTreeMap<String, Box<RawJsonValue>> = self
+	use BTreeMap as Map;
+
+	let mut unsigned: Map<&str, Box<RawJsonValue>> = self
 		.unsigned
-		.as_ref()
-		.map_or_else(|| Ok(BTreeMap::new()), |u| serde_json::from_str(u.get()))
+		.as_deref()
+		.map(RawJsonValue::get)
+		.map_or_else(|| Ok(Map::new()), serde_json::from_str)
 		.map_err(|e| err!(Database("Invalid unsigned in pdu event: {e}")))?;
 
 	// deliberately allowing for the possibility of negative age
@@ -37,36 +42,35 @@ pub fn add_age(&mut self) -> Result {
 	let then: i128 = self.origin_server_ts.into();
 	let this_age = now.saturating_sub(then);
 
-	unsigned.insert("age".to_owned(), to_raw_value(&this_age).expect("age is valid"));
-	self.unsigned = to_raw_value(&unsigned)
-		.map(Some)
-		.expect("unsigned is valid");
+	unsigned.insert("age", to_raw_value(&this_age)?);
+	self.unsigned = Some(to_raw_value(&unsigned)?);
 
 	Ok(())
 }
 
 #[implement(Pdu)]
-pub fn add_relation(&mut self, name: &str, pdu: &Pdu) -> Result {
-	let mut unsigned: BTreeMap<String, JsonValue> = self
+pub fn add_relation(&mut self, name: &str, pdu: Option<&Pdu>) -> Result {
+	use serde_json::Map;
+
+	let mut unsigned: Map<String, JsonValue> = self
 		.unsigned
-		.as_ref()
-		.map_or_else(|| Ok(BTreeMap::new()), |u| serde_json::from_str(u.get()))
+		.as_deref()
+		.map(RawJsonValue::get)
+		.map_or_else(|| Ok(Map::new()), serde_json::from_str)
 		.map_err(|e| err!(Database("Invalid unsigned in pdu event: {e}")))?;
 
-	let relations: &mut JsonValue = unsigned.entry("m.relations".into()).or_default();
-	if relations.as_object_mut().is_none() {
-		let mut object = serde_json::Map::<String, JsonValue>::new();
-		_ = relations.as_object_mut().insert(&mut object);
-	}
+	let pdu = pdu
+		.map(serde_json::to_value)
+		.transpose()?
+		.unwrap_or_else(|| JsonValue::Object(Map::new()));
 
-	relations
+	unsigned
+		.entry("m.relations")
+		.or_insert(JsonValue::Object(Map::new()))
 		.as_object_mut()
-		.expect("we just created it")
-		.insert(name.to_owned(), serde_json::to_value(pdu)?);
+		.map(|object| object.insert(name.to_owned(), pdu));
 
-	self.unsigned = to_raw_value(&unsigned)
-		.map(Some)
-		.expect("unsigned is valid");
+	self.unsigned = Some(to_raw_value(&unsigned)?);
 
 	Ok(())
 }

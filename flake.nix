@@ -9,7 +9,7 @@
     flake-utils.url = "github:numtide/flake-utils?ref=main";
     nix-filter.url = "github:numtide/nix-filter?ref=main";
     nixpkgs.url = "github:NixOS/nixpkgs?ref=nixpkgs-unstable";
-    rocksdb = { url = "github:girlbossceo/rocksdb?ref=v9.9.3"; flake = false; };
+    rocksdb = { url = "github:girlbossceo/rocksdb?ref=v9.11.1"; flake = false; };
     liburing = { url = "github:axboe/liburing?ref=master"; flake = false; };
   };
 
@@ -26,7 +26,7 @@
         file = ./rust-toolchain.toml;
 
         # See also `rust-toolchain.toml`
-        sha256 = "sha256-lMLAupxng4Fd9F1oDw8gx+qA0RuF7ou7xhNU8wgs0PU=";
+        sha256 = "sha256-AJ6LX/Q/Er9kS15bn9iflkUwcgYqRQxiOIL2ToVAXaU=";
       };
 
       mkScope = pkgs: pkgs.lib.makeScope pkgs.newScope (self: {
@@ -64,8 +64,10 @@
           patches = [];
           cmakeFlags = pkgs.lib.subtractLists
             [
-              # no real reason to have snappy, no one uses this
+              # no real reason to have snappy or zlib, no one uses this
               "-DWITH_SNAPPY=1"
+              "-DZLIB=1"
+              "-DWITH_ZLIB=1"
               # we dont need to use ldb or sst_dump (core_tools)
               "-DWITH_CORE_TOOLS=1"
               # we dont need to build rocksdb tests
@@ -82,6 +84,8 @@
             ++ [
               # no real reason to have snappy, no one uses this
               "-DWITH_SNAPPY=0"
+              "-DZLIB=0"
+              "-DWITH_ZLIB=0"
               # we dont need to use ldb or sst_dump (core_tools)
               "-DWITH_CORE_TOOLS=0"
               # we dont need trace tools
@@ -140,11 +144,11 @@
           toolchain
         ]
         ++ (with pkgsHost.pkgs; [
-          engage
-          cargo-audit
-
           # Required by hardened-malloc.rs dep
           binutils
+
+          cargo-audit
+          cargo-auditable
 
           # Needed for producing Debian packages
           cargo-deb
@@ -152,11 +156,14 @@
           # Needed for CI to check validity of produced Debian packages (dpkg-deb)
           dpkg
 
+	  engage
+
           # Needed for Complement
           go
 
           # Needed for our script for Complement
           jq
+          gotestfmt
 
           # Needed for finding broken markdown links
           lychee
@@ -171,7 +178,8 @@
           sccache
         ]
         # liburing is Linux-exclusive
-        ++ lib.optional stdenv.hostPlatform.isLinux liburing)
+        ++ lib.optional stdenv.hostPlatform.isLinux liburing
+        ++ lib.optional stdenv.hostPlatform.isLinux numactl)
         ++ scope.main.buildInputs
         ++ scope.main.propagatedBuildInputs
         ++ scope.main.nativeBuildInputs;

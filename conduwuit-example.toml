@@ -445,9 +445,18 @@
 #
 #allow_federation = true
 
-# This item is undocumented. Please contribute documentation for it.
+# Allows federation requests to be made to itself
+#
+# This isn't intended and is very likely a bug if federation requests are
+# being sent to yourself. This currently mainly exists for development
+# purposes.
 #
 #federation_loopback = false
+
+# Always calls /forget on behalf of the user if leaving a room. This is a
+# part of MSC4267 "Automatically forgetting rooms on leave"
+#
+#forget_forced_upon_leave = false
 
 # Set this to true to require authentication on the normally
 # unauthenticated profile retrieval endpoints (GET)
@@ -593,7 +602,7 @@
 # Currently, conduwuit doesn't support inbound batched key requests, so
 # this list should only contain other Synapse servers.
 #
-# example: ["matrix.org", "envs.net", "constellatory.net", "tchncs.de"]
+# example: ["matrix.org", "envs.net", "tchncs.de"]
 #
 #trusted_servers = ["matrix.org"]
 
@@ -821,7 +830,7 @@
 
 # Type of RocksDB database compression to use.
 #
-# Available options are "zstd", "zlib", "bz2", "lz4", or "none".
+# Available options are "zstd", "bz2", "lz4", or "none".
 #
 # It is best to use ZSTD as an overall good balance between
 # speed/performance, storage, IO amplification, and CPU usage. For more
@@ -924,6 +933,13 @@
 # from disabling.
 #
 #rocksdb_checksums = true
+
+# Enables the "atomic flush" mode in rocksdb. This option is not intended
+# for users. It may be removed or ignored in future versions. Atomic flush
+# may be enabled by the paranoid to possibly improve database integrity at
+# the cost of performance.
+#
+#rocksdb_atomic_flush = false
 
 # Database repair mode (for RocksDB SST corruption).
 #

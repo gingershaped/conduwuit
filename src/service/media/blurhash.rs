@@ -1,6 +1,6 @@
 #[cfg(feature = "blurhashing")]
 use conduwuit::config::BlurhashConfig as CoreBlurhashConfig;
-use conduwuit::{implement, Result};
+use conduwuit::{Result, implement};
 
 use super::Service;
 
@@ -172,7 +172,7 @@ impl std::fmt::Display for BlurhashingError {
 			#[cfg(feature = "blurhashing")]
 			| Self::ImageError(e) =>
 				write!(f, "There was an error with the image loading library => {e}")?,
-		};
+		}
 
 		Ok(())
 	}

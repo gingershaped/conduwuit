@@ -1,9 +1,9 @@
-use arrayvec::ArrayVec;
-use conduwuit::{checked, debug::DebugInspect, err, utils::string, Error, Result};
+use conduwuit::{
+	Error, Result, arrayvec::ArrayVec, checked, debug::DebugInspect, err, utils::string,
+};
 use serde::{
-	de,
+	Deserialize, de,
 	de::{DeserializeSeed, Visitor},
-	Deserialize,
 };
 
 use crate::util::unhandled;
@@ -241,7 +241,7 @@ impl<'a, 'de: 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
 			| "Ignore" => self.record_ignore(),
 			| "IgnoreAll" => self.record_ignore_all(),
 			| _ => unhandled!("Unrecognized deserialization Directive {name:?}"),
-		};
+		}
 
 		visitor.visit_unit()
 	}

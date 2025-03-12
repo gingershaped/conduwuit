@@ -1,10 +1,10 @@
-use std::collections::{hash_map, HashMap};
+use std::collections::{HashMap, hash_map};
 
-use conduwuit::{debug, debug_warn, implement, Err, Error, PduEvent, Result};
+use conduwuit::{Err, Error, PduEvent, Result, debug, debug_warn, implement};
 use futures::FutureExt;
 use ruma::{
-	api::federation::event::get_room_state_ids, events::StateEventType, EventId, OwnedEventId,
-	RoomId, ServerName,
+	EventId, OwnedEventId, RoomId, ServerName, api::federation::event::get_room_state_ids,
+	events::StateEventType,
 };
 
 use crate::rooms::short::ShortStateKey;
@@ -58,10 +58,11 @@ pub(super) async fn fetch_state(
 			| hash_map::Entry::Vacant(v) => {
 				v.insert(pdu.event_id.clone());
 			},
-			| hash_map::Entry::Occupied(_) =>
+			| hash_map::Entry::Occupied(_) => {
 				return Err!(Database(
 					"State event's type and state_key combination exists multiple times.",
-				)),
+				));
+			},
 		}
 	}
 

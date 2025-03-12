@@ -1,36 +1,35 @@
 use axum::extract::State;
 use conduwuit::{
-	at, is_equal_to,
+	Err, Event, PduCount, PduEvent, Result, at,
 	utils::{
+		IterStream, ReadyExt,
 		result::{FlatOk, LogErr},
 		stream::{BroadbandExt, TryIgnore, WidebandExt},
-		IterStream, ReadyExt,
 	},
-	Event, PduCount, PduEvent, Result,
 };
-use futures::{future::OptionFuture, pin_mut, FutureExt, StreamExt, TryFutureExt};
+use futures::{FutureExt, StreamExt, TryFutureExt, future::OptionFuture, pin_mut};
 use ruma::{
+	RoomId, UserId,
 	api::{
-		client::{filter::RoomEventFilter, message::get_message_events},
 		Direction,
+		client::{filter::RoomEventFilter, message::get_message_events},
 	},
 	events::{AnyStateEvent, StateEventType, TimelineEventType, TimelineEventType::*},
 	serde::Raw,
-	RoomId, UserId,
 };
 use service::{
+	Services,
 	rooms::{
 		lazy_loading,
 		lazy_loading::{Options, Witness},
 		timeline::PdusIterItem,
 	},
-	Services,
 };
 
 use crate::Ruma;
 
 /// list of safe and common non-state events to ignore if the user is ignored
-const IGNORED_MESSAGE_TYPES: &[TimelineEventType; 17] = &[
+const IGNORED_MESSAGE_TYPES: &[TimelineEventType] = &[
 	Audio,
 	CallInvite,
 	Emote,
@@ -68,6 +67,10 @@ pub(crate) async fn get_message_events_route(
 	let (sender_user, sender_device) = sender;
 	let room_id = &body.room_id;
 	let filter = &body.filter;
+
+	if !services.rooms.metadata.exists(room_id).await {
+		return Err!(Request(Forbidden("Room does not exist to this server")));
+	}
 
 	let from: PduCount = body
 		.from
@@ -225,34 +228,50 @@ async fn get_member_event(
 		.ok()
 }
 
+#[inline]
 pub(crate) async fn ignored_filter(
 	services: &Services,
 	item: PdusIterItem,
 	user_id: &UserId,
 ) -> Option<PdusIterItem> {
-	let (_, pdu) = &item;
+	let (_, ref pdu) = item;
 
+	is_ignored_pdu(services, pdu, user_id)
+		.await
+		.eq(&false)
+		.then_some(item)
+}
+
+#[inline]
+pub(crate) async fn is_ignored_pdu(
+	services: &Services,
+	pdu: &PduEvent,
+	user_id: &UserId,
+) -> bool {
 	// exclude Synapse's dummy events from bloating up response bodies. clients
 	// don't need to see this.
 	if pdu.kind.to_cow_str() == "org.matrix.dummy_event" {
-		return None;
+		return true;
 	}
 
-	if IGNORED_MESSAGE_TYPES.binary_search(&pdu.kind).is_ok()
-		&& (services.users.user_is_ignored(&pdu.sender, user_id).await
-			|| services
-				.server
-				.config
-				.forbidden_remote_server_names
-				.iter()
-				.any(is_equal_to!(pdu.sender().server_name())))
+	let ignored_type = IGNORED_MESSAGE_TYPES.binary_search(&pdu.kind).is_ok();
+
+	let ignored_server = services
+		.server
+		.config
+		.forbidden_remote_server_names
+		.contains(pdu.sender().server_name());
+
+	if ignored_type
+		&& (ignored_server || services.users.user_is_ignored(&pdu.sender, user_id).await)
 	{
-		return None;
+		return true;
 	}
 
-	Some(item)
+	false
 }
 
+#[inline]
 pub(crate) async fn visibility_filter(
 	services: &Services,
 	item: PdusIterItem,
@@ -268,7 +287,16 @@ pub(crate) async fn visibility_filter(
 		.then_some(item)
 }
 
+#[inline]
 pub(crate) fn event_filter(item: PdusIterItem, filter: &RoomEventFilter) -> Option<PdusIterItem> {
 	let (_, pdu) = &item;
 	pdu.matches(filter).then_some(item)
+}
+
+#[cfg_attr(debug_assertions, conduwuit::ctor)]
+fn _is_sorted() {
+	debug_assert!(
+		IGNORED_MESSAGE_TYPES.is_sorted(),
+		"IGNORED_MESSAGE_TYPES must be sorted by the developer"
+	);
 }

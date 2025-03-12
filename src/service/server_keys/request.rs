@@ -1,13 +1,13 @@
 use std::{collections::BTreeMap, fmt::Debug};
 
-use conduwuit::{debug, implement, Err, Result};
+use conduwuit::{Err, Result, debug, implement};
 use ruma::{
-	api::federation::discovery::{
-		get_remote_server_keys,
-		get_remote_server_keys_batch::{self, v2::QueryCriteria},
-		get_server_keys, ServerSigningKeys,
-	},
 	OwnedServerName, OwnedServerSigningKeyId, ServerName, ServerSigningKeyId,
+	api::federation::discovery::{
+		ServerSigningKeys, get_remote_server_keys,
+		get_remote_server_keys_batch::{self, v2::QueryCriteria},
+		get_server_keys,
+	},
 };
 
 #[implement(super::Service)]
@@ -43,7 +43,7 @@ where
 		.keys()
 		.rev()
 		.take(self.services.server.config.trusted_server_batch_size)
-		.last()
+		.next_back()
 		.cloned()
 	{
 		let request = Request {
@@ -79,7 +79,7 @@ pub async fn notary_request(
 	&self,
 	notary: &ServerName,
 	target: &ServerName,
-) -> Result<impl Iterator<Item = ServerSigningKeys> + Clone + Debug + Send> {
+) -> Result<impl Iterator<Item = ServerSigningKeys> + Clone + Debug + Send + use<>> {
 	use get_remote_server_keys::v2::Request;
 
 	let request = Request {

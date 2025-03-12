@@ -1,21 +1,21 @@
 use std::{fmt::Debug, time::Duration};
 
 use conduwuit::{
-	debug_warn, err, implement, utils::content_disposition::make_content_disposition, Err, Error,
-	Result,
+	Err, Error, Result, debug_warn, err, implement,
+	utils::content_disposition::make_content_disposition,
 };
-use http::header::{HeaderValue, CONTENT_DISPOSITION, CONTENT_TYPE};
+use http::header::{CONTENT_DISPOSITION, CONTENT_TYPE, HeaderValue};
 use ruma::{
+	Mxc, ServerName, UserId,
 	api::{
+		OutgoingRequest,
 		client::{
 			error::ErrorKind::{NotFound, Unrecognized},
 			media,
 		},
 		federation,
 		federation::authenticated_media::{Content, FileOrLocation},
-		OutgoingRequest,
 	},
-	Mxc, ServerName, UserId,
 };
 
 use super::{Dim, FileMeta};
@@ -32,12 +32,12 @@ pub async fn fetch_remote_thumbnail(
 	self.check_fetch_authorized(mxc)?;
 
 	let result = self
-		.fetch_thumbnail_unauthenticated(mxc, user, server, timeout_ms, dim)
+		.fetch_thumbnail_authenticated(mxc, user, server, timeout_ms, dim)
 		.await;
 
 	if let Err(Error::Request(NotFound, ..)) = &result {
 		return self
-			.fetch_thumbnail_authenticated(mxc, user, server, timeout_ms, dim)
+			.fetch_thumbnail_unauthenticated(mxc, user, server, timeout_ms, dim)
 			.await;
 	}
 
@@ -55,12 +55,12 @@ pub async fn fetch_remote_content(
 	self.check_fetch_authorized(mxc)?;
 
 	let result = self
-		.fetch_content_unauthenticated(mxc, user, server, timeout_ms)
+		.fetch_content_authenticated(mxc, user, server, timeout_ms)
 		.await;
 
 	if let Err(Error::Request(NotFound, ..)) = &result {
 		return self
-			.fetch_content_authenticated(mxc, user, server, timeout_ms)
+			.fetch_content_unauthenticated(mxc, user, server, timeout_ms)
 			.await;
 	}
 
@@ -283,7 +283,7 @@ async fn location_request(&self, location: &str) -> Result<FileMeta> {
 		.map_err(Into::into)
 		.map(|content| FileMeta {
 			content: Some(content),
-			content_type: content_type.clone().map(Into::into),
+			content_type: content_type.clone(),
 			content_disposition: Some(make_content_disposition(
 				content_disposition.as_ref(),
 				content_type.as_deref(),

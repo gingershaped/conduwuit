@@ -1,15 +1,15 @@
 use axum::extract::State;
-use conduwuit::{err, pdu::gen_event_id_canonical_json, warn, Err, PduEvent, Result};
+use conduwuit::{Err, PduEvent, Result, err, pdu::gen_event_id_canonical_json, warn};
 use futures::FutureExt;
 use ruma::{
-	api::federation::knock::send_knock,
-	events::{
-		room::member::{MembershipState, RoomMemberEventContent},
-		StateEventType,
-	},
-	serde::JsonObject,
 	OwnedServerName, OwnedUserId,
 	RoomVersionId::*,
+	api::federation::knock::send_knock,
+	events::{
+		StateEventType,
+		room::member::{MembershipState, RoomMemberEventContent},
+	},
+	serde::JsonObject,
 };
 
 use crate::Ruma;
@@ -137,7 +137,7 @@ pub(crate) async fn create_knock_event_v1_route(
 
 	if state_key != sender {
 		return Err!(Request(InvalidParam("state_key does not match sender user of event.")));
-	};
+	}
 
 	let origin: OwnedServerName = serde_json::from_value(
 		value

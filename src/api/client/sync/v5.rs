@@ -6,33 +6,33 @@ use std::{
 
 use axum::extract::State;
 use conduwuit::{
-	debug, error, extract_variant, trace,
+	Error, Result, TypeStateKey, debug, error, extract_variant, trace,
 	utils::{
-		math::{ruma_from_usize, usize_from_ruma},
 		BoolExt, IterStream, ReadyExt, TryFutureExtExt,
+		math::{ruma_from_usize, usize_from_ruma},
 	},
-	warn, Error, Result,
+	warn,
 };
 use futures::{FutureExt, StreamExt, TryFutureExt};
 use ruma::{
+	DeviceId, OwnedEventId, OwnedRoomId, RoomId, UInt, UserId,
 	api::client::{
 		error::ErrorKind,
 		sync::sync_events::{self, DeviceLists, UnreadNotificationsCount},
 	},
 	events::{
-		room::member::{MembershipState, RoomMemberEventContent},
 		AnyRawAccountDataEvent, AnySyncEphemeralRoomEvent, StateEventType, TimelineEventType,
+		room::member::{MembershipState, RoomMemberEventContent},
 	},
 	serde::Raw,
-	state_res::TypeStateKey,
-	uint, DeviceId, OwnedEventId, OwnedRoomId, OwnedUserId, RoomId, UInt, UserId,
+	uint,
 };
-use service::{rooms::read_receipt::pack_receipts, PduCount};
+use service::{PduCount, rooms::read_receipt::pack_receipts};
 
 use super::{filter_rooms, share_encrypted_room};
 use crate::{
-	client::{ignored_filter, sync::load_timeline, DEFAULT_BUMP_TYPES},
 	Ruma,
+	client::{DEFAULT_BUMP_TYPES, ignored_filter, sync::load_timeline},
 };
 
 type SyncInfo<'a> = (&'a UserId, &'a DeviceId, u64, &'a sync_events::v5::Request);
@@ -224,7 +224,11 @@ async fn fetch_subscriptions(
 
 		let limit: UInt = room.timeline_limit;
 
-		todo_room.0.extend(room.required_state.iter().cloned());
+		todo_room.0.extend(
+			room.required_state
+				.iter()
+				.map(|(ty, sk)| (ty.clone(), sk.as_str().into())),
+		);
 		todo_room.1 = todo_room.1.max(usize_from_ruma(limit));
 		// 0 means unknown because it got out of date
 		todo_room.2 = todo_room.2.min(
@@ -304,9 +308,12 @@ async fn handle_lists<'a>(
 
 				let limit: usize = usize_from_ruma(list.room_details.timeline_limit).min(100);
 
-				todo_room
-					.0
-					.extend(list.room_details.required_state.iter().cloned());
+				todo_room.0.extend(
+					list.room_details
+						.required_state
+						.iter()
+						.map(|(ty, sk)| (ty.clone(), sk.as_str().into())),
+				);
 
 				todo_room.1 = todo_room.1.max(limit);
 				// 0 means unknown because it got out of date
@@ -566,14 +573,13 @@ async fn process_rooms(
 				.await
 				.ok()
 				.or(name),
-			avatar: if let Some(heroes_avatar) = heroes_avatar {
-				ruma::JsOption::Some(heroes_avatar)
-			} else {
-				match services.rooms.state_accessor.get_avatar(room_id).await {
+			avatar: match heroes_avatar {
+				| Some(heroes_avatar) => ruma::JsOption::Some(heroes_avatar),
+				| _ => match services.rooms.state_accessor.get_avatar(room_id).await {
 					| ruma::JsOption::Some(avatar) => ruma::JsOption::from_option(avatar.url),
 					| ruma::JsOption::Null => ruma::JsOption::Null,
 					| ruma::JsOption::Undefined => ruma::JsOption::Undefined,
-				}
+				},
 			},
 			initial: Some(roomsince == &0),
 			is_dm: None,
@@ -765,13 +771,9 @@ async fn collect_e2ee<'a>(
 							continue;
 						};
 						if pdu.kind == TimelineEventType::RoomMember {
-							if let Some(state_key) = &pdu.state_key {
-								let user_id =
-									OwnedUserId::parse(state_key.clone()).map_err(|_| {
-										Error::bad_database("Invalid UserId in member PDU.")
-									})?;
-
-								if user_id == *sender_user {
+							if let Some(Ok(user_id)) = pdu.state_key.as_deref().map(UserId::parse)
+							{
+								if user_id == sender_user {
 									continue;
 								}
 
@@ -782,18 +784,18 @@ async fn collect_e2ee<'a>(
 										if !share_encrypted_room(
 											&services,
 											sender_user,
-											&user_id,
+											user_id,
 											Some(room_id),
 										)
 										.await
 										{
-											device_list_changes.insert(user_id);
+											device_list_changes.insert(user_id.to_owned());
 										}
 									},
 									| MembershipState::Leave => {
 										// Write down users that have left encrypted rooms we
 										// are in
-										left_encrypted_users.insert(user_id);
+										left_encrypted_users.insert(user_id.to_owned());
 									},
 									| _ => {},
 								}

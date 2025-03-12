@@ -8,6 +8,7 @@ mod id;
 mod raw_id;
 mod redact;
 mod relation;
+mod state_key;
 mod strip;
 #[cfg(test)]
 mod tests;
@@ -16,20 +17,21 @@ mod unsigned;
 use std::cmp::Ordering;
 
 use ruma::{
-	events::TimelineEventType, CanonicalJsonObject, CanonicalJsonValue, EventId, OwnedEventId,
-	OwnedRoomId, OwnedUserId, UInt,
+	CanonicalJsonObject, CanonicalJsonValue, EventId, OwnedEventId, OwnedRoomId, OwnedServerName,
+	OwnedUserId, UInt, events::TimelineEventType,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue as RawJsonValue;
 
 pub use self::{
+	Count as PduCount, Id as PduId, Pdu as PduEvent, RawId as RawPduId,
 	builder::{Builder, Builder as PduBuilder},
 	count::Count,
 	event::Event,
 	event_id::*,
 	id::*,
 	raw_id::*,
-	Count as PduCount, Id as PduId, Pdu as PduEvent, RawId as RawPduId,
+	state_key::{ShortStateKey, StateKey},
 };
 use crate::Result;
 
@@ -40,13 +42,13 @@ pub struct Pdu {
 	pub room_id: OwnedRoomId,
 	pub sender: OwnedUserId,
 	#[serde(skip_serializing_if = "Option::is_none")]
-	pub origin: Option<String>,
+	pub origin: Option<OwnedServerName>,
 	pub origin_server_ts: UInt,
 	#[serde(rename = "type")]
 	pub kind: TimelineEventType,
 	pub content: Box<RawJsonValue>,
 	#[serde(skip_serializing_if = "Option::is_none")]
-	pub state_key: Option<String>,
+	pub state_key: Option<StateKey>,
 	pub prev_events: Vec<OwnedEventId>,
 	pub depth: UInt,
 	pub auth_events: Vec<OwnedEventId>,

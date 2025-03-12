@@ -6,37 +6,37 @@ use std::{
 
 use axum::extract::State;
 use conduwuit::{
-	debug, error, extract_variant,
+	Error, PduCount, Result, debug, error, extract_variant,
 	utils::{
-		math::{ruma_from_usize, usize_from_ruma, usize_from_u64_truncated},
 		BoolExt, IterStream, ReadyExt, TryFutureExtExt,
+		math::{ruma_from_usize, usize_from_ruma, usize_from_u64_truncated},
 	},
-	warn, Error, PduCount, Result,
+	warn,
 };
 use futures::{FutureExt, StreamExt, TryFutureExt};
 use ruma::{
+	MilliSecondsSinceUnixEpoch, OwnedEventId, OwnedRoomId, RoomId, UInt, UserId,
 	api::client::{
 		error::ErrorKind,
 		sync::sync_events::{
-			self,
+			self, DeviceLists, UnreadNotificationsCount,
 			v4::{SlidingOp, SlidingSyncRoomHero},
-			DeviceLists, UnreadNotificationsCount,
 		},
 	},
 	events::{
-		room::member::{MembershipState, RoomMemberEventContent},
 		AnyRawAccountDataEvent, AnySyncEphemeralRoomEvent, StateEventType,
 		TimelineEventType::*,
+		room::member::{MembershipState, RoomMemberEventContent},
 	},
 	serde::Raw,
-	uint, MilliSecondsSinceUnixEpoch, OwnedEventId, OwnedRoomId, OwnedUserId, RoomId, UInt,
+	uint,
 };
 use service::rooms::read_receipt::pack_receipts;
 
 use super::{load_timeline, share_encrypted_room};
 use crate::{
-	client::{filter_rooms, ignored_filter, sync::v5::TodoRooms, DEFAULT_BUMP_TYPES},
 	Ruma,
+	client::{DEFAULT_BUMP_TYPES, filter_rooms, ignored_filter, sync::v5::TodoRooms},
 };
 
 pub(crate) const SINGLE_CONNECTION_SYNC: &str = "single_connection_sync";
@@ -258,12 +258,9 @@ pub(crate) async fn sync_events_v4_route(
 								continue;
 							};
 							if pdu.kind == RoomMember {
-								if let Some(state_key) = &pdu.state_key {
-									let user_id =
-										OwnedUserId::parse(state_key.clone()).map_err(|_| {
-											Error::bad_database("Invalid UserId in member PDU.")
-										})?;
-
+								if let Some(Ok(user_id)) =
+									pdu.state_key.as_deref().map(UserId::parse)
+								{
 									if user_id == *sender_user {
 										continue;
 									}
@@ -275,18 +272,18 @@ pub(crate) async fn sync_events_v4_route(
 											if !share_encrypted_room(
 												&services,
 												sender_user,
-												&user_id,
+												user_id,
 												Some(room_id),
 											)
 											.await
 											{
-												device_list_changes.insert(user_id);
+												device_list_changes.insert(user_id.to_owned());
 											}
 										},
 										| MembershipState::Leave => {
 											// Write down users that have left encrypted rooms we
 											// are in
-											left_encrypted_users.insert(user_id);
+											left_encrypted_users.insert(user_id.to_owned());
 										},
 										| _ => {},
 									}
@@ -398,9 +395,12 @@ pub(crate) async fn sync_events_v4_route(
 							.map_or(10, usize_from_u64_truncated)
 							.min(100);
 
-						todo_room
-							.0
-							.extend(list.room_details.required_state.iter().cloned());
+						todo_room.0.extend(
+							list.room_details
+								.required_state
+								.iter()
+								.map(|(ty, sk)| (ty.clone(), sk.as_str().into())),
+						);
 
 						todo_room.1 = todo_room.1.max(limit);
 						// 0 means unknown because it got out of date
@@ -452,7 +452,11 @@ pub(crate) async fn sync_events_v4_route(
 			.map_or(10, usize_from_u64_truncated)
 			.min(100);
 
-		todo_room.0.extend(room.required_state.iter().cloned());
+		todo_room.0.extend(
+			room.required_state
+				.iter()
+				.map(|(ty, sk)| (ty.clone(), sk.as_str().into())),
+		);
 		todo_room.1 = todo_room.1.max(limit);
 		// 0 means unknown because it got out of date
 		todo_room.2 = todo_room.2.min(
@@ -696,14 +700,13 @@ pub(crate) async fn sync_events_v4_route(
 				.await
 				.ok()
 				.or(name),
-			avatar: if let Some(heroes_avatar) = heroes_avatar {
-				ruma::JsOption::Some(heroes_avatar)
-			} else {
-				match services.rooms.state_accessor.get_avatar(room_id).await {
+			avatar: match heroes_avatar {
+				| Some(heroes_avatar) => ruma::JsOption::Some(heroes_avatar),
+				| _ => match services.rooms.state_accessor.get_avatar(room_id).await {
 					| ruma::JsOption::Some(avatar) => ruma::JsOption::from_option(avatar.url),
 					| ruma::JsOption::Null => ruma::JsOption::Null,
 					| ruma::JsOption::Undefined => ruma::JsOption::Undefined,
-				}
+				},
 			},
 			initial: Some(roomsince == &0),
 			is_dm: None,

@@ -45,8 +45,8 @@ env:
     # Get error output from nix that we can actually use, and use our binary caches for the earlier CI steps
     NIX_CONFIG: |
       show-trace = true
-      extra-substituters = https://attic.kennel.juneis.dog/conduwuit https://attic.kennel.juneis.dog/conduit https://conduwuit.cachix.org https://aseipp-nix-cache.freetls.fastly.net
-      extra-trusted-public-keys = conduit:eEKoUwlQGDdYmAI/Q/0slVlegqh/QmAvQd7HBSm21Wk= conduwuit:BbycGUgTISsltcmH0qNjFR9dbrQNYgdIAcmViSGoVTE= conduwuit.cachix.org-1:MFRm6jcnfTf0jSAbmvLfhO3KBMt4px+1xaereWXp8Xg=
+      extra-substituters = https://attic.kennel.juneis.dog/conduwuit https://attic.kennel.juneis.dog/conduit https://conduwuit.cachix.org https://aseipp-nix-cache.freetls.fastly.net https://nix-community.cachix.org https://crane.cachix.org
+      extra-trusted-public-keys = conduit:eEKoUwlQGDdYmAI/Q/0slVlegqh/QmAvQd7HBSm21Wk= conduwuit:BbycGUgTISsltcmH0qNjFR9dbrQNYgdIAcmViSGoVTE= conduwuit.cachix.org-1:MFRm6jcnfTf0jSAbmvLfhO3KBMt4px+1xaereWXp8Xg= nix-community.cachix.org-1:mB9FSh9qf2dCimDSUo8Zy7bkq5CX+/rkCWyvRCYg3Fs= crane.cachix.org-1:8Scfpmn9w+hGdXH/Q9tTLiYAE/2dnJYRJP7kl80GuRk=
       experimental-features = nix-command flakes
       extra-experimental-features = nix-command flakes
       accept-flake-config = true
@@ -59,7 +59,7 @@ permissions: {}
 jobs:
     tests:
         name: Test
-        runs-on: ubuntu-24.04
+        runs-on: self-hosted
         steps:
             - name: Setup SSH web publish
               env:
@@ -93,19 +93,6 @@ jobs:
 
                   echo "SSH_WEBSITE=1" >> "$GITHUB_ENV"
 
-            - name: Install liburing
-              run: |
-                  sudo apt install liburing-dev -y
-
-            - name: Free up a bit of runner space
-              run: |
-                  set +o pipefail
-                  sudo docker image prune --all --force || true
-                  sudo apt purge -y 'php.*' '^mongodb-.*' '^mysql-.*' azure-cli google-cloud-cli google-chrome-stable firefox powershell microsoft-edge-stable || true
-                  sudo apt clean
-                  sudo rm -rf /usr/local/lib/android /usr/local/julia* /usr/local/games /usr/local/sqlpackage /usr/local/share/powershell /usr/local/share/edge_driver /usr/local/share/gecko_driver /usr/local/share/chromium /usr/local/share/chromedriver-linux64 /usr/lib/google-cloud-sdk /usr/lib/jvm /usr/lib/mono /usr/local/lib/heroku /usr/lib/heroku /usr/local/share/boost /usr/share/dotnet /usr/local/bin/cmake* /usr/local/bin/stack /usr/local/bin/terraform /opt/microsoft/powershell /opt/hostedtoolcache/CodeQL /opt/hostedtoolcache/go /opt/hostedtoolcache/PyPy /usr/local/bin/sam || true
-                  set -o pipefail
-
             - name: Sync repository
               uses: actions/checkout@v4
               with:
@@ -123,60 +110,9 @@ jobs:
                     exit 1
                   fi
 
-            - uses: nixbuild/nix-quick-install-action@master
-
-            - name: Restore and cache Nix store
-              # we want a fresh-state when we do releases/tags to avoid potential cache poisoning attacks impacting
-              # releases and tags
-              #if: ${{ !startsWith(github.ref, 'refs/tags/') }}
-              uses: nix-community/cache-nix-action@v5.1.0
-              with:
-                # restore and save a cache using this key
-                primary-key: nix-${{ runner.os }}-${{ hashFiles('**/*.nix', '**/.lock') }}
-                # if there's no cache hit, restore a cache by this prefix
-                restore-prefixes-first-match: nix-${{ runner.os }}-
-                # collect garbage until Nix store size (in bytes) is at most this number
-                # before trying to save a new cache
-                gc-max-store-size-linux: 2073741824
-                # do purge caches
-                purge: true
-                # purge all versions of the cache
-                purge-prefixes: nix-${{ runner.os }}-
-                # created more than this number of seconds ago relative to the start of the `Post Restore` phase
-                purge-last-accessed: 86400
-                # except the version with the `primary-key`, if it exists
-                purge-primary-key: never
-                # always save the cache
-                save-always: true
-
-            - name: Enable Cachix binary cache
-              run: |
-                  nix profile install nixpkgs#cachix
-                  cachix use crane
-                  cachix use nix-community
-
-            - name: Apply Nix binary cache configuration
-              run: |
-                  sudo tee -a "${XDG_CONFIG_HOME:-$HOME/.config}/nix/nix.conf" > /dev/null <<EOF
-                  extra-substituters = https://attic.kennel.juneis.dog/conduwuit https://attic.kennel.juneis.dog/conduit https://conduwuit.cachix.org https://aseipp-nix-cache.freetls.fastly.net
-                  extra-trusted-public-keys = conduit:eEKoUwlQGDdYmAI/Q/0slVlegqh/QmAvQd7HBSm21Wk= conduwuit:BbycGUgTISsltcmH0qNjFR9dbrQNYgdIAcmViSGoVTE= cache.lix.systems:aBnZUw8zA7H35Cz2RyKFVs3H4PlGTLawyY5KRbvJR8o= conduwuit.cachix.org-1:MFRm6jcnfTf0jSAbmvLfhO3KBMt4px+1xaereWXp8Xg=
-                  experimental-features = nix-command flakes
-                  extra-experimental-features = nix-command flakes
-                  accept-flake-config = true
-                  EOF
-
-            - name: Use alternative Nix binary caches if specified
-              if: ${{ (env.ATTIC_ENDPOINT != '') && (env.ATTIC_PUBLIC_KEY != '') }}
-              run: |
-                  sudo tee -a "${XDG_CONFIG_HOME:-$HOME/.config}/nix/nix.conf" > /dev/null <<EOF
-                  extra-substituters = ${ATTIC_ENDPOINT}
-                  extra-trusted-public-keys = ${ATTIC_PUBLIC_KEY}
-                  EOF
-
             - name: Prepare build environment
               run: |
                   echo 'source $HOME/.nix-profile/share/nix-direnv/direnvrc' > "$HOME/.direnvrc"
-                  nix profile install --inputs-from . nixpkgs#direnv nixpkgs#nix-direnv
                   direnv allow
                   nix develop .#all-features --command true
 
@@ -250,41 +186,28 @@ jobs:
               if: success() || failure()
               run: |
                   if [ ${GH_JOB_STATUS} == 'success' ]; then
-                      echo '# ✅ completed suwuccessfully' >> $GITHUB_STEP_SUMMARY
+                      echo '# ✅ CI completed suwuccessfully' >> $GITHUB_STEP_SUMMARY
                   else
-                      echo '# CI failure' >> $GITHUB_STEP_SUMMARY
+                      echo '# ❌ CI failed (last 100 lines of output)' >> $GITHUB_STEP_SUMMARY
                       echo '```' >> $GITHUB_STEP_SUMMARY
-                      tail -n 40 test_output.log | sed 's/\x1b\[[0-9;]*m//g' >> $GITHUB_STEP_SUMMARY
+                      tail -n 100 test_output.log | sed 's/\x1b\[[0-9;]*m//g' >> $GITHUB_STEP_SUMMARY
                       echo '```' >> $GITHUB_STEP_SUMMARY
 
-                      echo '# Complement diff results' >> $GITHUB_STEP_SUMMARY
+                      echo '# Complement diff results (last 100 lines)' >> $GITHUB_STEP_SUMMARY
                       echo '```diff' >> $GITHUB_STEP_SUMMARY
-                      tail -n 100 complement_diff_output.log | sed 's/\x1b\[[0-9;]*m//g' >>     $GITHUB_STEP_SUMMARY
+                      tail -n 100 complement_diff_output.log | sed 's/\x1b\[[0-9;]*m//g' >> $GITHUB_STEP_SUMMARY
                       echo '```' >> $GITHUB_STEP_SUMMARY
                   fi
 
-            - name: Run cargo clean test artifacts to free up space
-              run: |
-                  cargo clean --profile test
-
     build:
         name: Build
-        runs-on: ubuntu-24.04
+        runs-on: self-hosted
         strategy:
             matrix:
                 include:
                     - target: aarch64-linux-musl
                     - target: x86_64-linux-musl
         steps:
-            - name: Free up a bit of runner space
-              run: |
-                  set +o pipefail
-                  sudo docker image prune --all --force || true
-                  sudo apt purge -y 'php.*' '^mongodb-.*' '^mysql-.*' azure-cli google-cloud-cli google-chrome-stable firefox powershell microsoft-edge-stable || true
-                  sudo apt clean
-                  sudo rm -rf /usr/local/lib/android /usr/local/julia* /usr/local/games /usr/local/sqlpackage /usr/local/share/powershell /usr/local/share/edge_driver /usr/local/share/gecko_driver /usr/local/share/chromium /usr/local/share/chromedriver-linux64 /usr/lib/google-cloud-sdk /usr/lib/jvm /usr/lib/mono /usr/local/lib/heroku /usr/lib/heroku /usr/local/share/boost /usr/share/dotnet /usr/local/bin/cmake* /usr/local/bin/stack /usr/local/bin/terraform /opt/microsoft/powershell /opt/hostedtoolcache/CodeQL /opt/hostedtoolcache/go /opt/hostedtoolcache/PyPy /usr/local/bin/sam || true
-                  set -o pipefail
-
             - name: Sync repository
               uses: actions/checkout@v4
               with:
@@ -318,60 +241,9 @@ jobs:
 
                   echo "SSH_WEBSITE=1" >> "$GITHUB_ENV"
 
-            - uses: nixbuild/nix-quick-install-action@master
-
-            - name: Restore and cache Nix store
-              # we want a fresh-state when we do releases/tags to avoid potential cache poisoning attacks impacting
-              # releases and tags
-              #if: ${{ !startsWith(github.ref, 'refs/tags/') }}
-              uses: nix-community/cache-nix-action@v5.1.0
-              with:
-                # restore and save a cache using this key
-                primary-key: nix-${{ runner.os }}-${{ matrix.target }}-${{ hashFiles('**/*.nix', '**/.lock') }}
-                # if there's no cache hit, restore a cache by this prefix
-                restore-prefixes-first-match: nix-${{ runner.os }}-
-                # collect garbage until Nix store size (in bytes) is at most this number
-                # before trying to save a new cache
-                gc-max-store-size-linux: 2073741824
-                # do purge caches
-                purge: true
-                # purge all versions of the cache
-                purge-prefixes: nix-${{ runner.os }}-
-                # created more than this number of seconds ago relative to the start of the `Post Restore` phase
-                purge-last-accessed: 86400
-                # except the version with the `primary-key`, if it exists
-                purge-primary-key: never
-                # always save the cache
-                save-always: true
-
-            - name: Enable Cachix binary cache
-              run: |
-                  nix profile install nixpkgs#cachix
-                  cachix use crane
-                  cachix use nix-community
-
-            - name: Apply Nix binary cache configuration
-              run: |
-                  sudo tee -a "${XDG_CONFIG_HOME:-$HOME/.config}/nix/nix.conf" > /dev/null <<EOF
-                  extra-substituters = https://attic.kennel.juneis.dog/conduwuit https://attic.kennel.juneis.dog/conduit https://conduwuit.cachix.org https://aseipp-nix-cache.freetls.fastly.net
-                  extra-trusted-public-keys = conduit:eEKoUwlQGDdYmAI/Q/0slVlegqh/QmAvQd7HBSm21Wk= conduwuit:BbycGUgTISsltcmH0qNjFR9dbrQNYgdIAcmViSGoVTE= cache.lix.systems:aBnZUw8zA7H35Cz2RyKFVs3H4PlGTLawyY5KRbvJR8o= conduwuit.cachix.org-1:MFRm6jcnfTf0jSAbmvLfhO3KBMt4px+1xaereWXp8Xg=
-                  experimental-features = nix-command flakes
-                  extra-experimental-features = nix-command flakes
-                  accept-flake-config = true
-                  EOF
-
-            - name: Use alternative Nix binary caches if specified
-              if: ${{ (env.ATTIC_ENDPOINT != '') && (env.ATTIC_PUBLIC_KEY != '') }}
-              run: |
-                  sudo tee -a "${XDG_CONFIG_HOME:-$HOME/.config}/nix/nix.conf" > /dev/null <<EOF
-                  extra-substituters = ${ATTIC_ENDPOINT}
-                  extra-trusted-public-keys = ${ATTIC_PUBLIC_KEY}
-                  EOF
-
             - name: Prepare build environment
               run: |
                   echo 'source $HOME/.nix-profile/share/nix-direnv/direnvrc' > "$HOME/.direnvrc"
-                  nix profile install --impure --inputs-from . nixpkgs#direnv nixpkgs#nix-direnv
                   direnv allow
                   nix develop .#all-features --command true --impure
 
@@ -623,136 +495,10 @@ jobs:
                     scp oci-image-${{ matrix.target }}-debug.tar.gz website:/var/www/girlboss.ceo/~strawberry/conduwuit/ci-bins/${WEBSERVER_DIR_NAME}/oci-image-${{ matrix.target }}-debug.tar.gz
                   fi
 
-    build_mac_binaries:
-        name: Build MacOS Binaries
-        strategy:
-          matrix:
-            os: [macos-latest, macos-13]
-        runs-on: ${{ matrix.os }}
-        steps:
-            - name: Sync repository
-              uses: actions/checkout@v4
-              with:
-                persist-credentials: false
-
-            - name: Setup SSH web publish
-              env:
-                web_upload_ssh_private_key: ${{ secrets.WEB_UPLOAD_SSH_PRIVATE_KEY }}
-              if: (startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/main' || (github.event.pull_request.draft != true)) && (env.web_upload_ssh_private_key != '') && github.event.pull_request.user.login != 'renovate[bot]'
-              run: |
-                  mkdir -p -v ~/.ssh
-
-                  echo "${{ secrets.WEB_UPLOAD_SSH_KNOWN_HOSTS }}" >> ~/.ssh/known_hosts
-                  echo "${{ secrets.WEB_UPLOAD_SSH_PRIVATE_KEY }}" >> ~/.ssh/id_ed25519
-
-                  chmod 600 ~/.ssh/id_ed25519
-
-                  cat >>~/.ssh/config <<END
-                  Host website
-                    HostName ${{ secrets.WEB_UPLOAD_SSH_HOSTNAME }}
-                    User ${{ secrets.WEB_UPLOAD_SSH_USERNAME }}
-                    IdentityFile ~/.ssh/id_ed25519
-                    StrictHostKeyChecking yes
-                    AddKeysToAgent no
-                    ForwardX11 no
-                    BatchMode yes
-                  END
-
-                  echo "Checking connection"
-                  ssh -q website "echo test" || ssh -q website "echo test"
-
-                  echo "SSH_WEBSITE=1" >> "$GITHUB_ENV"
-
-            - name: Tag comparison check
-              if: ${{ startsWith(github.ref, 'refs/tags/v') && !endsWith(github.ref, '-rc') }}
-              run: |
-                  # Tag mismatch with latest repo tag check to prevent potential downgrades
-                  LATEST_TAG=$(git describe --tags `git rev-list --tags --max-count=1`)
-
-                  if [ ${LATEST_TAG} != ${GH_REF_NAME} ]; then
-                    echo '# WARNING: Attempting to run this workflow for a tag that is not the latest repo tag. Aborting.'
-                    echo '# WARNING: Attempting to run this workflow for a tag that is not the latest repo tag. Aborting.' >> $GITHUB_STEP_SUMMARY
-                    exit 1
-                  fi
-
-            # use sccache for Rust
-            - name: Run sccache-cache
-              # we want a fresh-state when we do releases/tags to avoid potential cache poisoning attacks impacting
-              # releases and tags
-              #if: ${{ (env.SCCACHE_GHA_ENABLED == 'true') && !startsWith(github.ref, 'refs/tags/') }}
-              uses: mozilla-actions/sccache-action@main
-
-            # use rust-cache
-            - uses: Swatinem/rust-cache@v2
-              with:
-                cache-all-crates: "true"
-                cache-on-failure: "true"
-                cache-targets: "true"
-
-            # Nix can't do portable macOS builds yet
-            - name: Build macOS x86_64 binary
-              if: ${{ matrix.os == 'macos-13' }}
-              run: |
-                  CONDUWUIT_VERSION_EXTRA="$(git rev-parse --short ${{ github.sha }})" cargo build --release --locked --features=perf_measurements,sentry_telemetry,direct_tls
-                  cp -v -f target/release/conduwuit conduwuit-macos-x86_64
-                  otool -L conduwuit-macos-x86_64
-
-            # quick smoke test of the x86_64 macOS binary
-            - name: Run x86_64 macOS release binary
-              if: ${{ matrix.os == 'macos-13' }}
-              run: |
-                  ./conduwuit-macos-x86_64 --help
-                  ./conduwuit-macos-x86_64 --version
-
-            - name: Build macOS arm64 binary
-              if: ${{ matrix.os == 'macos-latest' }}
-              run: |
-                  CONDUWUIT_VERSION_EXTRA="$(git rev-parse --short ${{ github.sha }})" cargo build --release --locked --features=perf_measurements,sentry_telemetry,direct_tls
-                  cp -v -f target/release/conduwuit conduwuit-macos-arm64
-                  otool -L conduwuit-macos-arm64
-
-            # quick smoke test of the arm64 macOS binary
-            - name: Run arm64 macOS release binary
-              if: ${{ matrix.os == 'macos-latest' }}
-              run: |
-                  ./conduwuit-macos-arm64 --help
-                  ./conduwuit-macos-arm64 --version
-
-            - name: Upload macOS x86_64 binary to webserver
-              if: ${{ matrix.os == 'macos-13' }}
-              run: |
-                  if [ ! -z $SSH_WEBSITE ]; then
-                    chmod +x conduwuit-macos-x86_64
-                    scp conduwuit-macos-x86_64 website:/var/www/girlboss.ceo/~strawberry/conduwuit/ci-bins/${WEBSERVER_DIR_NAME}/conduwuit-macos-x86_64
-                  fi
-
-            - name: Upload macOS arm64 binary to webserver
-              if: ${{ matrix.os == 'macos-latest' }}
-              run: |
-                  if [ ! -z $SSH_WEBSITE ]; then
-                    chmod +x conduwuit-macos-arm64
-                    scp conduwuit-macos-arm64 website:/var/www/girlboss.ceo/~strawberry/conduwuit/ci-bins/${WEBSERVER_DIR_NAME}/conduwuit-macos-arm64
-                  fi
-
-            - name: Upload macOS x86_64 binary
-              if: ${{ matrix.os == 'macos-13' }}
-              uses: actions/upload-artifact@v4
-              with:
-                  name: conduwuit-macos-x86_64
-                  path: conduwuit-macos-x86_64
-                  if-no-files-found: error
-
-            - name: Upload macOS arm64 binary
-              if: ${{ matrix.os == 'macos-latest' }}
-              uses: actions/upload-artifact@v4
-              with:
-                  name: conduwuit-macos-arm64
-                  path: conduwuit-macos-arm64
-                  if-no-files-found: error
     variables: 
       outputs:
         github_repository: ${{ steps.var.outputs.github_repository }}
-      runs-on: "ubuntu-latest"
+      runs-on: self-hosted
       steps:
         - name: Setting global variables
           uses: actions/github-script@v7
@@ -762,7 +508,7 @@ jobs:
               core.setOutput('github_repository', '${{ github.repository }}'.toLowerCase())
     docker:
         name: Docker publish
-        runs-on: ubuntu-24.04
+        runs-on: self-hosted
         needs: [build, variables, tests]
         permissions:
           packages: write
@@ -804,6 +550,8 @@ jobs:
 
             - name: Download artifacts
               uses: actions/download-artifact@v4
+              with:
+                pattern: "oci*"
 
             - name: Move OCI images into position
               run: |

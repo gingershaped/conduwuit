@@ -1,9 +1,9 @@
 use clap::Subcommand;
 use conduwuit::Result;
 use futures::StreamExt;
-use ruma::{events::room::message::RoomMessageEventContent, RoomId};
+use ruma::{RoomId, events::room::message::RoomMessageEventContent};
 
-use crate::{get_room_info, Command, PAGE_SIZE};
+use crate::{Command, PAGE_SIZE, get_room_info};
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum RoomDirectoryCommand {
@@ -67,7 +67,7 @@ pub(super) async fn reprocess(
 
 			if rooms.is_empty() {
 				return Ok(RoomMessageEventContent::text_plain("No more rooms."));
-			};
+			}
 
 			let output = format!(
 				"Rooms (page {page}):\n```\n{}\n```",

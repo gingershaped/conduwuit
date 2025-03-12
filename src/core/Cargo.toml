@@ -92,6 +92,8 @@ serde_json.workspace = true
 serde_regex.workspace = true
 serde_yaml.workspace = true
 serde.workspace = true
+smallvec.workspace = true
+smallstr.workspace = true
 thiserror.workspace = true
 tikv-jemallocator.optional = true
 tikv-jemallocator.workspace = true
@@ -113,6 +115,9 @@ nix.workspace = true
 [target.'cfg(all(not(target_env = "msvc"), target_os = "linux"))'.dependencies]
 hardened_malloc-rs.workspace = true
 hardened_malloc-rs.optional = true
+
+[dev-dependencies]
+maplit.workspace = true
 
 [lints]
 workspace = true

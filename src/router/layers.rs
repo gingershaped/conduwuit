@@ -1,16 +1,16 @@
 use std::{any::Any, sync::Arc, time::Duration};
 
 use axum::{
-	extract::{DefaultBodyLimit, MatchedPath},
 	Router,
+	extract::{DefaultBodyLimit, MatchedPath},
 };
 use axum_client_ip::SecureClientIpSource;
-use conduwuit::{debug, error, Result, Server};
+use conduwuit::{Result, Server, debug, error};
 use conduwuit_api::router::state::Guard;
 use conduwuit_service::Services;
 use http::{
-	header::{self, HeaderName},
 	HeaderValue, Method, StatusCode,
+	header::{self, HeaderName},
 };
 use tower::ServiceBuilder;
 use tower_http::{
@@ -61,8 +61,12 @@ pub(crate) fn build(services: &Arc<Services>) -> Result<(Router, Guard)> {
 		)
 		.layer(axum::middleware::from_fn_with_state(Arc::clone(services), request::handle))
 		.layer(SecureClientIpSource::ConnectInfo.into_extension())
-		.layer(ResponseBodyTimeoutLayer::new(Duration::from_secs(server.config.client_response_timeout)))
-		.layer(RequestBodyTimeoutLayer::new(Duration::from_secs(server.config.client_receive_timeout)))
+		.layer(ResponseBodyTimeoutLayer::new(Duration::from_secs(
+			server.config.client_response_timeout,
+		)))
+		.layer(RequestBodyTimeoutLayer::new(Duration::from_secs(
+			server.config.client_receive_timeout,
+		)))
 		.layer(TimeoutLayer::new(Duration::from_secs(server.config.client_request_timeout)))
 		.layer(SetResponseHeaderLayer::if_not_present(
 			HeaderName::from_static("origin-agent-cluster"), // https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Origin-Agent-Cluster
@@ -176,12 +180,12 @@ fn catch_panic(
 		.requests_panic
 		.fetch_add(1, std::sync::atomic::Ordering::Release);
 
-	let details = if let Some(s) = err.downcast_ref::<String>() {
-		s.clone()
-	} else if let Some(s) = err.downcast_ref::<&str>() {
-		(*s).to_owned()
-	} else {
-		"Unknown internal server error occurred.".to_owned()
+	let details = match err.downcast_ref::<String>() {
+		| Some(s) => s.clone(),
+		| _ => match err.downcast_ref::<&str>() {
+			| Some(s) => (*s).to_owned(),
+			| _ => "Unknown internal server error occurred.".to_owned(),
+		},
 	};
 
 	error!("{details:#}");

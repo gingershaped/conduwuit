@@ -3,8 +3,8 @@ mod configure;
 use std::{
 	mem::take,
 	sync::{
-		atomic::{AtomicUsize, Ordering},
 		Arc, Mutex,
+		atomic::{AtomicUsize, Ordering},
 	},
 	thread,
 	thread::JoinHandle,
@@ -12,19 +12,18 @@ use std::{
 
 use async_channel::{QueueStrategy, Receiver, RecvError, Sender};
 use conduwuit::{
-	debug, debug_warn, err, error, implement,
+	Error, Result, Server, debug, debug_warn, err, error, implement,
 	result::DebugInspect,
+	smallvec::SmallVec,
 	trace,
 	utils::sys::compute::{get_affinity, nth_core_available, set_affinity},
-	Error, Result, Server,
 };
-use futures::{channel::oneshot, TryFutureExt};
+use futures::{TryFutureExt, channel::oneshot};
 use oneshot::Sender as ResultSender;
 use rocksdb::Direction;
-use smallvec::SmallVec;
 
 use self::configure::configure;
-use crate::{keyval::KeyBuf, stream, Handle, Map};
+use crate::{Handle, Map, keyval::KeyBuf, stream};
 
 /// Frontend thread-pool. Operating system threads are used to make database
 /// requests which are not cached. These thread-blocking requests are offloaded
@@ -147,11 +146,9 @@ pub(crate) fn close(&self) {
 		.map(JoinHandle::join)
 		.map(|result| result.map_err(Error::from_panic))
 		.enumerate()
-		.for_each(|(id, result)| {
-			match result {
-				| Ok(()) => trace!(?id, "worker joined"),
-				| Err(error) => error!(?id, "worker joined with error: {error}"),
-			};
+		.for_each(|(id, result)| match result {
+			| Ok(()) => trace!(?id, "worker joined"),
+			| Err(error) => error!(?id, "worker joined with error: {error}"),
 		});
 }
 
@@ -346,7 +343,7 @@ fn worker_handle(self: &Arc<Self>, cmd: Cmd) {
 		| Cmd::Get(cmd) if cmd.key.len() == 1 => self.handle_get(cmd),
 		| Cmd::Get(cmd) => self.handle_batch(cmd),
 		| Cmd::Iter(cmd) => self.handle_iter(cmd),
-	};
+	}
 }
 
 #[implement(Pool)]
@@ -363,7 +360,7 @@ fn handle_iter(&self, mut cmd: Seek) {
 		return;
 	}
 
-	let from = cmd.key.as_deref().map(Into::into);
+	let from = cmd.key.as_deref();
 
 	let result = match cmd.dir {
 		| Direction::Forward => cmd.state.init_fwd(from),
@@ -395,7 +392,7 @@ fn handle_batch(self: &Arc<Self>, mut cmd: Get) {
 		return;
 	}
 
-	let keys = cmd.key.iter().map(Into::into);
+	let keys = cmd.key.iter();
 
 	let result: SmallVec<_> = cmd.map.get_batch_blocking(keys).collect();
 

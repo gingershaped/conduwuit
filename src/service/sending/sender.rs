@@ -2,32 +2,33 @@ use std::{
 	collections::{BTreeMap, HashMap, HashSet},
 	fmt::Debug,
 	sync::{
-		atomic::{AtomicU64, AtomicUsize, Ordering},
 		Arc,
+		atomic::{AtomicU64, AtomicUsize, Ordering},
 	},
 	time::{Duration, Instant},
 };
 
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use conduwuit::{
-	debug, err, error,
+	Error, Result, debug, err, error,
 	result::LogErr,
 	trace,
 	utils::{
-		calculate_hash, continue_exponential_backoff_secs,
+		ReadyExt, calculate_hash, continue_exponential_backoff_secs,
 		future::TryExtExt,
 		stream::{BroadbandExt, IterStream, WidebandExt},
-		ReadyExt,
 	},
-	warn, Error, Result,
+	warn,
 };
 use futures::{
+	FutureExt, StreamExt,
 	future::{BoxFuture, OptionFuture},
 	join, pin_mut,
 	stream::FuturesUnordered,
-	FutureExt, StreamExt,
 };
 use ruma::{
+	CanonicalJsonObject, MilliSecondsSinceUnixEpoch, OwnedRoomId, OwnedServerName, OwnedUserId,
+	RoomId, RoomVersionId, ServerName, UInt,
 	api::{
 		appservice::event::push_events::v1::EphemeralData,
 		federation::transactions::{
@@ -40,18 +41,17 @@ use ruma::{
 	},
 	device_id,
 	events::{
-		push_rules::PushRulesEvent, receipt::ReceiptType, AnySyncEphemeralRoomEvent,
-		GlobalAccountDataEventType,
+		AnySyncEphemeralRoomEvent, GlobalAccountDataEventType, push_rules::PushRulesEvent,
+		receipt::ReceiptType,
 	},
 	push,
 	serde::Raw,
-	uint, CanonicalJsonObject, MilliSecondsSinceUnixEpoch, OwnedRoomId, OwnedServerName,
-	OwnedUserId, RoomId, RoomVersionId, ServerName, UInt,
+	uint,
 };
-use serde_json::value::{to_raw_value, RawValue as RawJsonValue};
+use serde_json::value::{RawValue as RawJsonValue, to_raw_value};
 
 use super::{
-	appservice, data::QueueItem, Destination, EduBuf, EduVec, Msg, SendingEvent, Service,
+	Destination, EduBuf, EduVec, Msg, SendingEvent, Service, appservice, data::QueueItem,
 };
 
 #[derive(Debug)]
@@ -138,7 +138,7 @@ impl Service {
 		match response {
 			| Ok(dest) => self.handle_response_ok(&dest, futures, statuses).await,
 			| Err((dest, e)) => Self::handle_response_err(dest, statuses, &e),
-		};
+		}
 	}
 
 	fn handle_response_err(dest: Destination, statuses: &mut CurTransactionStatus, e: &Error) {
@@ -146,7 +146,7 @@ impl Service {
 		statuses.entry(dest).and_modify(|e| {
 			*e = match e {
 				| TransactionStatus::Running => TransactionStatus::Failed(1, Instant::now()),
-				| TransactionStatus::Retrying(ref n) =>
+				| &mut TransactionStatus::Retrying(ref n) =>
 					TransactionStatus::Failed(n.saturating_add(1), Instant::now()),
 				| TransactionStatus::Failed(..) => {
 					panic!("Request that was not even running failed?!")
@@ -211,7 +211,7 @@ impl Service {
 	async fn finish_responses<'a>(&'a self, futures: &mut SendingFutures<'a>) {
 		use tokio::{
 			select,
-			time::{sleep_until, Instant},
+			time::{Instant, sleep_until},
 		};
 
 		let timeout = self.server.config.sender_shutdown_timeout;
@@ -319,10 +319,7 @@ impl Service {
 		if let Destination::Federation(server_name) = dest {
 			if let Ok((select_edus, last_count)) = self.select_edus(server_name).await {
 				debug_assert!(select_edus.len() <= EDU_LIMIT, "exceeded edus limit");
-				let select_edus = select_edus
-					.into_iter()
-					.map(Into::into)
-					.map(SendingEvent::Edu);
+				let select_edus = select_edus.into_iter().map(SendingEvent::Edu);
 
 				events.extend(select_edus);
 				self.db.set_latest_educount(server_name, last_count);

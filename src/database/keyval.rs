@@ -1,6 +1,5 @@
-use conduwuit::Result;
+use conduwuit::{Result, smallvec::SmallVec};
 use serde::{Deserialize, Serialize};
-use smallvec::SmallVec;
 
 use crate::{de, ser};
 

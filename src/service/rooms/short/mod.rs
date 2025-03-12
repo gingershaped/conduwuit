@@ -1,13 +1,13 @@
 use std::{borrow::Borrow, fmt::Debug, mem::size_of_val, sync::Arc};
 
-pub use conduwuit::pdu::{ShortEventId, ShortId, ShortRoomId};
-use conduwuit::{err, implement, utils, utils::IterStream, Result};
+pub use conduwuit::pdu::{ShortEventId, ShortId, ShortRoomId, ShortStateKey};
+use conduwuit::{Result, StateKey, err, implement, utils, utils::IterStream};
 use database::{Deserialized, Get, Map, Qry};
 use futures::{Stream, StreamExt};
-use ruma::{events::StateEventType, EventId, RoomId};
+use ruma::{EventId, RoomId, events::StateEventType};
 use serde::Deserialize;
 
-use crate::{globals, Dep};
+use crate::{Dep, globals};
 
 pub struct Service {
 	db: Data,
@@ -28,7 +28,6 @@ struct Services {
 }
 
 pub type ShortStateHash = ShortId;
-pub type ShortStateKey = ShortId;
 
 impl crate::Service for Service {
 	fn build(args: crate::Args<'_>) -> Result<Arc<Self>> {
@@ -181,7 +180,7 @@ where
 pub async fn get_statekey_from_short(
 	&self,
 	shortstatekey: ShortStateKey,
-) -> Result<(StateEventType, String)> {
+) -> Result<(StateEventType, StateKey)> {
 	const BUFSIZE: usize = size_of::<ShortStateKey>();
 
 	self.db
@@ -200,7 +199,7 @@ pub async fn get_statekey_from_short(
 pub fn multi_get_statekey_from_short<'a, S>(
 	&'a self,
 	shortstatekey: S,
-) -> impl Stream<Item = Result<(StateEventType, String)>> + Send + 'a
+) -> impl Stream<Item = Result<(StateEventType, StateKey)>> + Send + 'a
 where
 	S: Stream<Item = ShortStateKey> + Send + 'a,
 {

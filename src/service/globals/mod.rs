@@ -7,7 +7,7 @@ use std::{
 	time::Instant,
 };
 
-use conduwuit::{error, utils::bytes::pretty, Result, Server};
+use conduwuit::{Result, Server, error, utils::bytes::pretty};
 use data::Data;
 use regex::RegexSet;
 use ruma::{OwnedEventId, OwnedRoomAliasId, OwnedServerName, OwnedUserId, ServerName, UserId};
@@ -152,8 +152,6 @@ impl Service {
 	pub fn turn_username(&self) -> &String { &self.server.config.turn_username }
 
 	pub fn notification_push_path(&self) -> &String { &self.server.config.notification_push_path }
-
-	pub fn emergency_password(&self) -> &Option<String> { &self.server.config.emergency_password }
 
 	pub fn url_preview_domain_contains_allowlist(&self) -> &Vec<String> {
 		&self.server.config.url_preview_domain_contains_allowlist

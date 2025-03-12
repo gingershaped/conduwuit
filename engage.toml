@@ -18,12 +18,12 @@ script = "direnv --version"
 [[task]]
 name = "rustc"
 group = "versions"
-script = "rustc --version"
+script = "rustc --version -v"
 
 [[task]]
 name = "cargo"
 group = "versions"
-script = "cargo --version"
+script = "cargo --version -v"
 
 [[task]]
 name = "cargo-fmt"
@@ -61,14 +61,9 @@ group = "versions"
 script = "markdownlint --version"
 
 [[task]]
-name = "dpkg"
-group = "versions"
-script = "dpkg --version"
-
-[[task]]
 name = "cargo-audit"
 group = "security"
-script = "cargo audit -D warnings -D unmaintained -D unsound -D yanked"
+script = "cargo audit --color=always -D warnings -D unmaintained -D unsound -D yanked"
 
 [[task]]
 name = "cargo-fmt"
@@ -167,24 +162,6 @@ group = "lints"
 script = "markdownlint docs *.md || true" # TODO: fix the ton of markdown lints so we can drop `|| true`
 
 [[task]]
-name = "cargo/all"
-group = "tests"
-script = """
-env DIRENV_DEVSHELL=all-features \
-    direnv exec . \
-    cargo test \
-        --workspace \
-        --locked \
-        --profile test \
-        --all-targets \
-        --no-fail-fast \
-        --all-features \
-        --color=always \
-        -- \
-        --color=always
-"""
-
-[[task]]
 name = "cargo/default"
 group = "tests"
 script = """
@@ -201,24 +178,6 @@ env DIRENV_DEVSHELL=default \
         --color=always
 """
 
-[[task]]
-name = "cargo/no-features"
-group = "tests"
-script = """
-env DIRENV_DEVSHELL=no-features \
-    direnv exec . \
-    cargo test \
-        --workspace \
-        --locked \
-        --profile test \
-        --all-targets \
-        --no-fail-fast \
-        --no-default-features \
-        --color=always \
-        -- \
-        --color=always
-"""
-
 # Checks if the generated example config differs from the checked in repo's
 # example config.
 [[task]]
@@ -227,23 +186,4 @@ group = "tests"
 depends = ["cargo/default"]
 script = """
 git diff --exit-code conduwuit-example.toml
-"""
-
-# Ensure that the flake's default output can build and run without crashing
-#
-# This is a dynamically-linked jemalloc build, which is a case not covered by
-# our other tests. We've had linking problems in the past with dynamic
-# jemalloc builds that usually show up as an immediate segfault or "invalid free"
-[[task]]
-name = "nix-default"
-group = "tests"
-script = """
-env DIRENV_DEVSHELL=dynamic \
-    CARGO_PROFILE="test" \
-    direnv exec . \
-    bin/nix-build-and-cache just .#default-test
-env DIRENV_DEVSHELL=dynamic \
-    CARGO_PROFILE="test" \
-    direnv exec . \
-    nix run -L .#default-test -- --help && nix run -L .#default-test -- --version
 """

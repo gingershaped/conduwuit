@@ -7,7 +7,7 @@ use std::{
 };
 
 use async_trait::async_trait;
-use conduwuit::{err, error::inspect_log, utils::string::SplitInfallible, Err, Result, Server};
+use conduwuit::{Err, Result, Server, err, error::inspect_log, utils::string::SplitInfallible};
 use database::Database;
 
 /// Abstract interface for a Service
@@ -39,6 +39,11 @@ pub(crate) trait Service: Any + Send + Sync {
 	/// Return the name of the service.
 	/// i.e. `crate::service::make_name(std::module_path!())`
 	fn name(&self) -> &str;
+
+	/// Return true if the service worker opts out of the tokio cooperative
+	/// budgeting. This can reduce tail latency at the risk of event loop
+	/// starvation.
+	fn unconstrained(&self) -> bool { false }
 }
 
 /// Args are passed to `Service::build` when a service is constructed. This

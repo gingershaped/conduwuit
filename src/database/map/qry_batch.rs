@@ -1,17 +1,16 @@
 use std::{fmt::Debug, sync::Arc};
 
 use conduwuit::{
-	implement,
+	Result, implement,
 	utils::{
-		stream::{automatic_amplification, automatic_width, WidebandExt},
 		IterStream,
+		stream::{WidebandExt, automatic_amplification, automatic_width},
 	},
-	Result,
 };
 use futures::{Stream, StreamExt, TryStreamExt};
 use serde::Serialize;
 
-use crate::{keyval::KeyBuf, ser, Handle};
+use crate::{Handle, keyval::KeyBuf, ser};
 
 pub trait Qry<'a, K, S>
 where
@@ -51,7 +50,6 @@ where
 				.iter()
 				.map(ser::serialize_to::<KeyBuf, _>)
 				.map(|result| result.expect("failed to serialize query key"))
-				.map(Into::into)
 				.collect();
 
 			self.db

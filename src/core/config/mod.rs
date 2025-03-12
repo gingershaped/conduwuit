@@ -14,18 +14,18 @@ use either::{
 	Either::{Left, Right},
 };
 use figment::providers::{Env, Format, Toml};
-pub use figment::{value::Value as FigmentValue, Figment};
+pub use figment::{Figment, value::Value as FigmentValue};
 use regex::RegexSet;
 use ruma::{
-	api::client::discovery::discover_support::ContactRole, OwnedRoomOrAliasId, OwnedServerName,
-	OwnedUserId, RoomVersionId,
+	OwnedRoomOrAliasId, OwnedServerName, OwnedUserId, RoomVersionId,
+	api::client::discovery::discover_support::ContactRole,
 };
-use serde::{de::IgnoredAny, Deserialize};
+use serde::{Deserialize, de::IgnoredAny};
 use url::Url;
 
 use self::proxy::ProxyConfig;
 pub use self::{check::check, manager::Manager};
-use crate::{err, error::Error, utils::sys, Result};
+use crate::{Result, err, error::Error, utils::sys};
 
 /// All the config options for conduwuit.
 #[allow(clippy::struct_excessive_bools)]
@@ -52,7 +52,7 @@ use crate::{err, error::Error, utils::sys, Result};
 ### For more information, see:
 ### https://conduwuit.puppyirl.gay/configuration.html
 "#,
-	ignore = "catchall well_known tls blurhashing"
+	ignore = "catchall well_known tls blurhashing allow_invalid_tls_certificates_yes_i_know_what_the_fuck_i_am_doing_with_this_and_i_know_this_is_insecure"
 )]
 pub struct Config {
 	/// The server_name is the pretty name of this server. It is used as a
@@ -558,8 +558,18 @@ pub struct Config {
 	#[serde(default = "true_fn")]
 	pub allow_federation: bool,
 
+	/// Allows federation requests to be made to itself
+	///
+	/// This isn't intended and is very likely a bug if federation requests are
+	/// being sent to yourself. This currently mainly exists for development
+	/// purposes.
 	#[serde(default)]
 	pub federation_loopback: bool,
+
+	/// Always calls /forget on behalf of the user if leaving a room. This is a
+	/// part of MSC4267 "Automatically forgetting rooms on leave"
+	#[serde(default)]
+	pub forget_forced_upon_leave: bool,
 
 	/// Set this to true to require authentication on the normally
 	/// unauthenticated profile retrieval endpoints (GET)
@@ -713,7 +723,7 @@ pub struct Config {
 	/// Currently, conduwuit doesn't support inbound batched key requests, so
 	/// this list should only contain other Synapse servers.
 	///
-	/// example: ["matrix.org", "envs.net", "constellatory.net", "tchncs.de"]
+	/// example: ["matrix.org", "envs.net", "tchncs.de"]
 	///
 	/// default: ["matrix.org"]
 	#[serde(default = "default_trusted_servers")]
@@ -975,7 +985,7 @@ pub struct Config {
 
 	/// Type of RocksDB database compression to use.
 	///
-	/// Available options are "zstd", "zlib", "bz2", "lz4", or "none".
+	/// Available options are "zstd", "bz2", "lz4", or "none".
 	///
 	/// It is best to use ZSTD as an overall good balance between
 	/// speed/performance, storage, IO amplification, and CPU usage. For more
@@ -1088,6 +1098,13 @@ pub struct Config {
 	/// default: true
 	#[serde(default = "true_fn")]
 	pub rocksdb_checksums: bool,
+
+	/// Enables the "atomic flush" mode in rocksdb. This option is not intended
+	/// for users. It may be removed or ignored in future versions. Atomic flush
+	/// may be enabled by the paranoid to possibly improve database integrity at
+	/// the cost of performance.
+	#[serde(default)]
+	pub rocksdb_atomic_flush: bool,
 
 	/// Database repair mode (for RocksDB SST corruption).
 	///
@@ -1788,6 +1805,16 @@ pub struct Config {
 	/// default: true
 	#[serde(default = "true_fn")]
 	pub config_reload_signal: bool,
+
+	/// Toggles ignore checking/validating TLS certificates
+	///
+	/// This applies to everything, including URL previews, federation requests,
+	/// etc. This is a hidden argument that should NOT be used in production as
+	/// it is highly insecure and I will personally yell at you if I catch you
+	/// using this.
+	#[serde(default)]
+	pub allow_invalid_tls_certificates_yes_i_know_what_the_fuck_i_am_doing_with_this_and_i_know_this_is_insecure:
+		bool,
 
 	// external structure; separate section
 	#[serde(default)]

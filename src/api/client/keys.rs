@@ -1,9 +1,10 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use axum::extract::State;
-use conduwuit::{err, utils, Error, Result};
-use futures::{stream::FuturesUnordered, StreamExt};
+use conduwuit::{Err, Error, Result, debug, debug_warn, err, info, result::NotFound, utils};
+use futures::{StreamExt, stream::FuturesUnordered};
 use ruma::{
+	OneTimeKeyAlgorithm, OwnedDeviceId, OwnedUserId, UserId,
 	api::{
 		client::{
 			error::ErrorKind,
@@ -15,15 +16,15 @@ use ruma::{
 		},
 		federation,
 	},
+	encryption::CrossSigningKey,
 	serde::Raw,
-	OneTimeKeyAlgorithm, OwnedDeviceId, OwnedUserId, UserId,
 };
 use serde_json::json;
 
 use super::SESSION_ID_LENGTH;
 use crate::{
-	service::{users::parse_master_key, Services},
 	Ruma,
+	service::{Services, users::parse_master_key},
 };
 
 /// # `POST /_matrix/client/r0/keys/upload`
@@ -40,6 +41,20 @@ pub(crate) async fn upload_keys_route(
 	let (sender_user, sender_device) = body.sender();
 
 	for (key_id, one_time_key) in &body.one_time_keys {
+		if one_time_key
+			.deserialize()
+			.inspect_err(|e| {
+				debug_warn!(
+					?key_id,
+					?one_time_key,
+					"Invalid one time key JSON submitted by client, skipping: {e}"
+				);
+			})
+			.is_err()
+		{
+			continue;
+		}
+
 		services
 			.users
 			.add_one_time_key(sender_user, sender_device, key_id, one_time_key)
@@ -47,6 +62,24 @@ pub(crate) async fn upload_keys_route(
 	}
 
 	if let Some(device_keys) = &body.device_keys {
+		let deser_device_keys = device_keys.deserialize().map_err(|e| {
+			err!(Request(BadJson(debug_warn!(
+				?device_keys,
+				"Invalid device keys JSON uploaded by client: {e}"
+			))))
+		})?;
+
+		if deser_device_keys.user_id != sender_user {
+			return Err!(Request(Unknown(
+				"User ID in keys uploaded does not match your own user ID"
+			)));
+		}
+		if deser_device_keys.device_id != sender_device {
+			return Err!(Request(Unknown(
+				"Device ID in keys uploaded does not match your own device ID"
+			)));
+		}
+
 		// TODO: merge this and the existing event?
 		// This check is needed to assure that signatures are kept
 		if services
@@ -125,41 +158,139 @@ pub(crate) async fn upload_signing_keys_route(
 		auth_error: None,
 	};
 
-	if let Some(auth) = &body.auth {
-		let (worked, uiaainfo) = services
-			.uiaa
-			.try_auth(sender_user, sender_device, auth, &uiaainfo)
-			.await?;
+	match check_for_new_keys(
+		services,
+		sender_user,
+		body.self_signing_key.as_ref(),
+		body.user_signing_key.as_ref(),
+		body.master_key.as_ref(),
+	)
+	.await
+	.inspect_err(|e| info!(?e))
+	{
+		| Ok(exists) => {
+			if let Some(result) = exists {
+				// No-op, they tried to reupload the same set of keys
+				// (lost connection for example)
+				return Ok(result);
+			}
+			debug!(
+				"Skipping UIA in accordance with MSC3967, the user didn't have any existing keys"
+			);
+			// Some of the keys weren't found, so we let them upload
+		},
+		| _ => {
+			match &body.auth {
+				| Some(auth) => {
+					let (worked, uiaainfo) = services
+						.uiaa
+						.try_auth(sender_user, sender_device, auth, &uiaainfo)
+						.await?;
 
-		if !worked {
-			return Err(Error::Uiaa(uiaainfo));
-		}
-	// Success!
-	} else if let Some(json) = body.json_body {
-		uiaainfo.session = Some(utils::random_string(SESSION_ID_LENGTH));
-		services
-			.uiaa
-			.create(sender_user, sender_device, &uiaainfo, &json);
+					if !worked {
+						return Err(Error::Uiaa(uiaainfo));
+					}
+					// Success!
+				},
+				| _ => match body.json_body {
+					| Some(json) => {
+						uiaainfo.session = Some(utils::random_string(SESSION_ID_LENGTH));
+						services
+							.uiaa
+							.create(sender_user, sender_device, &uiaainfo, &json);
 
-		return Err(Error::Uiaa(uiaainfo));
-	} else {
-		return Err(Error::BadRequest(ErrorKind::NotJson, "Not json."));
+						return Err(Error::Uiaa(uiaainfo));
+					},
+					| _ => {
+						return Err(Error::BadRequest(ErrorKind::NotJson, "Not json."));
+					},
+				},
+			}
+		},
 	}
 
-	if let Some(master_key) = &body.master_key {
-		services
-			.users
-			.add_cross_signing_keys(
-				sender_user,
-				master_key,
-				&body.self_signing_key,
-				&body.user_signing_key,
-				true, // notify so that other users see the new keys
-			)
-			.await?;
-	}
+	services
+		.users
+		.add_cross_signing_keys(
+			sender_user,
+			&body.master_key,
+			&body.self_signing_key,
+			&body.user_signing_key,
+			true, // notify so that other users see the new keys
+		)
+		.await?;
 
 	Ok(upload_signing_keys::v3::Response {})
+}
+
+async fn check_for_new_keys(
+	services: crate::State,
+	user_id: &UserId,
+	self_signing_key: Option<&Raw<CrossSigningKey>>,
+	user_signing_key: Option<&Raw<CrossSigningKey>>,
+	master_signing_key: Option<&Raw<CrossSigningKey>>,
+) -> Result<Option<upload_signing_keys::v3::Response>> {
+	debug!("checking for existing keys");
+	let mut empty = false;
+	if let Some(master_signing_key) = master_signing_key {
+		let (key, value) = parse_master_key(user_id, master_signing_key)?;
+		let result = services
+			.users
+			.get_master_key(None, user_id, &|_| true)
+			.await;
+		if result.is_not_found() {
+			empty = true;
+		} else {
+			let existing_master_key = result?;
+			let (existing_key, existing_value) = parse_master_key(user_id, &existing_master_key)?;
+			if existing_key != key || existing_value != value {
+				return Err!(Request(Forbidden(
+					"Tried to change an existing master key, UIA required"
+				)));
+			}
+		}
+	}
+	if let Some(user_signing_key) = user_signing_key {
+		let key = services.users.get_user_signing_key(user_id).await;
+		if key.is_not_found() && !empty {
+			return Err!(Request(Forbidden(
+				"Tried to update an existing user signing key, UIA required"
+			)));
+		}
+		if !key.is_not_found() {
+			let existing_signing_key = key?.deserialize()?;
+			if existing_signing_key != user_signing_key.deserialize()? {
+				return Err!(Request(Forbidden(
+					"Tried to change an existing user signing key, UIA required"
+				)));
+			}
+		}
+	}
+	if let Some(self_signing_key) = self_signing_key {
+		let key = services
+			.users
+			.get_self_signing_key(None, user_id, &|_| true)
+			.await;
+		if key.is_not_found() && !empty {
+			debug!(?key);
+			return Err!(Request(Forbidden(
+				"Tried to add a new signing key independently from the master key"
+			)));
+		}
+		if !key.is_not_found() {
+			let existing_signing_key = key?.deserialize()?;
+			if existing_signing_key != self_signing_key.deserialize()? {
+				return Err!(Request(Forbidden(
+					"Tried to update an existing self signing key, UIA required"
+				)));
+			}
+		}
+	}
+	if empty {
+		return Ok(None);
+	}
+
+	Ok(Some(upload_signing_keys::v3::Response {}))
 }
 
 /// # `POST /_matrix/client/r0/keys/signatures/upload`
@@ -385,35 +516,40 @@ where
 		.collect();
 
 	while let Some((server, response)) = futures.next().await {
-		if let Ok(response) = response {
-			for (user, master_key) in response.master_keys {
-				let (master_key_id, mut master_key) = parse_master_key(&user, &master_key)?;
+		match response {
+			| Ok(response) => {
+				for (user, master_key) in response.master_keys {
+					let (master_key_id, mut master_key) = parse_master_key(&user, &master_key)?;
 
-				if let Ok(our_master_key) = services
-					.users
-					.get_key(&master_key_id, sender_user, &user, &allowed_signatures)
-					.await
-				{
-					let (_, mut our_master_key) = parse_master_key(&user, &our_master_key)?;
-					master_key.signatures.append(&mut our_master_key.signatures);
+					if let Ok(our_master_key) = services
+						.users
+						.get_key(&master_key_id, sender_user, &user, &allowed_signatures)
+						.await
+					{
+						let (_, mut our_master_key) = parse_master_key(&user, &our_master_key)?;
+						master_key.signatures.append(&mut our_master_key.signatures);
+					}
+					let json = serde_json::to_value(master_key).expect("to_value always works");
+					let raw = serde_json::from_value(json).expect("Raw::from_value always works");
+					services
+						.users
+						.add_cross_signing_keys(
+							&user, &raw, &None, &None,
+							false, /* Dont notify. A notification would trigger another key
+							       * request resulting in an endless loop */
+						)
+						.await?;
+					if let Some(raw) = raw {
+						master_keys.insert(user.clone(), raw);
+					}
 				}
-				let json = serde_json::to_value(master_key).expect("to_value always works");
-				let raw = serde_json::from_value(json).expect("Raw::from_value always works");
-				services
-					.users
-					.add_cross_signing_keys(
-						&user, &raw, &None, &None,
-						false, /* Dont notify. A notification would trigger another key request
-						       * resulting in an endless loop */
-					)
-					.await?;
-				master_keys.insert(user.clone(), raw);
-			}
 
-			self_signing_keys.extend(response.self_signing_keys);
-			device_keys.extend(response.device_keys);
-		} else {
-			failures.insert(server.to_string(), json!({}));
+				self_signing_keys.extend(response.self_signing_keys);
+				device_keys.extend(response.device_keys);
+			},
+			| _ => {
+				failures.insert(server.to_string(), json!({}));
+			},
 		}
 	}
 

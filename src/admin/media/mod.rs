@@ -1,3 +1,4 @@
+#![allow(rustdoc::broken_intra_doc_links)]
 mod commands;
 
 use clap::Subcommand;
@@ -27,18 +28,18 @@ pub(super) enum MediaCommand {
 	DeleteList,
 
 	/// - Deletes all remote (and optionally local) media created before or
-	///   after \[duration] time using filesystem metadata first created at
-	///   date, or fallback to last modified date. This will always ignore
-	///   errors by default.
+	///   after [duration] time using filesystem metadata first created at date,
+	///   or fallback to last modified date. This will always ignore errors by
+	///   default.
 	DeletePastRemoteMedia {
 		/// - The relative time (e.g. 30s, 5m, 7d) within which to search
 		duration: String,
 
-		/// - Only delete media created more recently than \[duration] ago
+		/// - Only delete media created before [duration] ago
 		#[arg(long, short)]
 		before: bool,
 
-		/// - Only delete media created after \[duration] ago
+		/// - Only delete media created after [duration] ago
 		#[arg(long, short)]
 		after: bool,
 

@@ -2,11 +2,11 @@ use std::time::Duration;
 
 use axum::extract::State;
 use axum_client_ip::InsecureClientIp;
-use conduwuit::{debug, err, info, utils::ReadyExt, warn, Err};
+use conduwuit::{Err, debug, err, info, utils::ReadyExt};
 use futures::StreamExt;
 use ruma::{
+	UserId,
 	api::client::{
-		error::ErrorKind,
 		session::{
 			get_login_token,
 			get_login_types::{
@@ -21,12 +21,11 @@ use ruma::{
 		},
 		uiaa,
 	},
-	OwnedUserId, UserId,
 };
 use service::uiaa::SESSION_ID_LENGTH;
 
 use super::{DEVICE_ID_LENGTH, TOKEN_LENGTH};
-use crate::{utils, utils::hash, Error, Result, Ruma};
+use crate::{Error, Result, Ruma, utils, utils::hash};
 
 /// # `GET /_matrix/client/v3/login`
 ///
@@ -67,6 +66,8 @@ pub(crate) async fn login_route(
 	InsecureClientIp(client): InsecureClientIp,
 	body: Ruma<login::v3::Request>,
 ) -> Result<login::v3::Response> {
+	let emergency_mode_enabled = services.config.emergency_password.is_some();
+
 	// Validate login method
 	// TODO: Other login methods
 	let user_id = match &body.login_info {
@@ -78,36 +79,67 @@ pub(crate) async fn login_route(
 			..
 		}) => {
 			debug!("Got password login type");
-			let user_id = if let Some(uiaa::UserIdentifier::UserIdOrLocalpart(user_id)) =
-				identifier
-			{
-				UserId::parse_with_server_name(
-					user_id.to_lowercase(),
-					services.globals.server_name(),
-				)
-			} else if let Some(user) = user {
-				OwnedUserId::parse(user)
-			} else {
-				warn!("Bad login type: {:?}", &body.login_info);
-				return Err!(Request(Forbidden("Bad login type.")));
-			}
-			.map_err(|_| Error::BadRequest(ErrorKind::InvalidUsername, "Username is invalid."))?;
+			let user_id =
+				if let Some(uiaa::UserIdentifier::UserIdOrLocalpart(user_id)) = identifier {
+					UserId::parse_with_server_name(user_id, &services.config.server_name)
+				} else if let Some(user) = user {
+					UserId::parse_with_server_name(user, &services.config.server_name)
+				} else {
+					return Err!(Request(Unknown(
+						debug_warn!(?body.login_info, "Valid identifier or username was not provided (invalid or unsupported login type?)")
+					)));
+				}
+				.map_err(|e| err!(Request(InvalidUsername(warn!("Username is invalid: {e}")))))?;
 
+			let lowercased_user_id = UserId::parse_with_server_name(
+				user_id.localpart().to_lowercase(),
+				&services.config.server_name,
+			)?;
+
+			if !services.globals.user_is_local(&user_id)
+				|| !services.globals.user_is_local(&lowercased_user_id)
+			{
+				return Err!(Request(Unknown("User ID does not belong to this homeserver")));
+			}
+
+			// first try the username as-is
 			let hash = services
 				.users
 				.password_hash(&user_id)
 				.await
-				.map_err(|_| err!(Request(Forbidden("Wrong username or password."))))?;
+				.inspect_err(|e| debug!("{e}"));
 
-			if hash.is_empty() {
-				return Err!(Request(UserDeactivated("The user has been deactivated")));
+			match hash {
+				| Ok(hash) => {
+					if hash.is_empty() {
+						return Err!(Request(UserDeactivated("The user has been deactivated")));
+					}
+
+					hash::verify_password(password, &hash)
+						.inspect_err(|e| debug!("{e}"))
+						.map_err(|_| err!(Request(Forbidden("Wrong username or password."))))?;
+
+					user_id
+				},
+				| Err(_e) => {
+					let hash_lowercased_user_id = services
+						.users
+						.password_hash(&lowercased_user_id)
+						.await
+						.inspect_err(|e| debug!("{e}"))
+						.map_err(|_| err!(Request(Forbidden("Wrong username or password."))))?;
+
+					if hash_lowercased_user_id.is_empty() {
+						return Err!(Request(UserDeactivated("The user has been deactivated")));
+					}
+
+					hash::verify_password(password, &hash_lowercased_user_id)
+						.inspect_err(|e| debug!("{e}"))
+						.map_err(|_| err!(Request(Forbidden("Wrong username or password."))))?;
+
+					lowercased_user_id
+				},
 			}
-
-			if hash::verify_password(password, &hash).is_err() {
-				return Err!(Request(Forbidden("Wrong username or password.")));
-			}
-
-			user_id
 		},
 		| login::v3::LoginInfo::Token(login::v3::Token { token }) => {
 			debug!("Got token login type");
@@ -122,46 +154,38 @@ pub(crate) async fn login_route(
 			user,
 		}) => {
 			debug!("Got appservice login type");
+
+			let Some(ref info) = body.appservice_info else {
+				return Err!(Request(MissingToken("Missing appservice token.")));
+			};
+
 			let user_id =
 				if let Some(uiaa::UserIdentifier::UserIdOrLocalpart(user_id)) = identifier {
-					UserId::parse_with_server_name(
-						user_id.to_lowercase(),
-						services.globals.server_name(),
-					)
+					UserId::parse_with_server_name(user_id, &services.config.server_name)
 				} else if let Some(user) = user {
-					OwnedUserId::parse(user)
+					UserId::parse_with_server_name(user, &services.config.server_name)
 				} else {
-					warn!("Bad login type: {:?}", &body.login_info);
-					return Err(Error::BadRequest(ErrorKind::forbidden(), "Bad login type."));
+					return Err!(Request(Unknown(
+						debug_warn!(?body.login_info, "Valid identifier or username was not provided (invalid or unsupported login type?)")
+					)));
 				}
-				.map_err(|e| {
-					warn!("Failed to parse username from appservice logging in: {e}");
-					Error::BadRequest(ErrorKind::InvalidUsername, "Username is invalid.")
-				})?;
+				.map_err(|e| err!(Request(InvalidUsername(warn!("Username is invalid: {e}")))))?;
 
-			if let Some(ref info) = body.appservice_info {
-				if !info.is_user_match(&user_id) {
-					return Err(Error::BadRequest(
-						ErrorKind::Exclusive,
-						"User is not in namespace.",
-					));
-				}
-			} else {
-				return Err(Error::BadRequest(
-					ErrorKind::MissingToken,
-					"Missing appservice token.",
-				));
+			if !services.globals.user_is_local(&user_id) {
+				return Err!(Request(Unknown("User ID does not belong to this homeserver")));
+			}
+
+			if !info.is_user_match(&user_id) && !emergency_mode_enabled {
+				return Err!(Request(Exclusive("Username is not in an appservice namespace.")));
 			}
 
 			user_id
 		},
 		| _ => {
-			warn!("Unsupported or unknown login type: {:?}", &body.login_info);
-			debug!("JSON body: {:?}", &body.json_body);
-			return Err(Error::BadRequest(
-				ErrorKind::Unknown,
-				"Unsupported or unknown login type.",
-			));
+			debug!("/login json_body: {:?}", &body.json_body);
+			return Err!(Request(Unknown(
+				debug_warn!(?body.login_info, "Invalid or unsupported login type")
+			)));
 		},
 	};
 
@@ -214,9 +238,6 @@ pub(crate) async fn login_route(
 
 	info!("{user_id} logged in");
 
-	// home_server is deprecated but apparently must still be sent despite it being
-	// deprecated over 6 years ago. initially i thought this macro was unnecessary,
-	// but ruma uses this same macro for the same reason so...
 	#[allow(deprecated)]
 	Ok(login::v3::Response {
 		user_id,
@@ -224,7 +245,7 @@ pub(crate) async fn login_route(
 		device_id,
 		well_known: client_discovery_info,
 		expires_in: None,
-		home_server: Some(services.globals.server_name().to_owned()),
+		home_server: Some(services.config.server_name.clone()),
 		refresh_token: None,
 	})
 }
@@ -259,26 +280,32 @@ pub(crate) async fn login_token_route(
 		auth_error: None,
 	};
 
-	if let Some(auth) = &body.auth {
-		let (worked, uiaainfo) = services
-			.uiaa
-			.try_auth(sender_user, sender_device, auth, &uiaainfo)
-			.await?;
+	match &body.auth {
+		| Some(auth) => {
+			let (worked, uiaainfo) = services
+				.uiaa
+				.try_auth(sender_user, sender_device, auth, &uiaainfo)
+				.await?;
 
-		if !worked {
-			return Err(Error::Uiaa(uiaainfo));
-		}
+			if !worked {
+				return Err(Error::Uiaa(uiaainfo));
+			}
 
-		// Success!
-	} else if let Some(json) = body.json_body.as_ref() {
-		uiaainfo.session = Some(utils::random_string(SESSION_ID_LENGTH));
-		services
-			.uiaa
-			.create(sender_user, sender_device, &uiaainfo, json);
+			// Success!
+		},
+		| _ => match body.json_body.as_ref() {
+			| Some(json) => {
+				uiaainfo.session = Some(utils::random_string(SESSION_ID_LENGTH));
+				services
+					.uiaa
+					.create(sender_user, sender_device, &uiaainfo, json);
 
-		return Err(Error::Uiaa(uiaainfo));
-	} else {
-		return Err!(Request(NotJson("No JSON body was sent when required.")));
+				return Err(Error::Uiaa(uiaainfo));
+			},
+			| _ => {
+				return Err!(Request(NotJson("No JSON body was sent when required.")));
+			},
+		},
 	}
 
 	let login_token = utils::random_string(TOKEN_LENGTH);

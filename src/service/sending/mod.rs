@@ -12,17 +12,17 @@ use std::{
 
 use async_trait::async_trait;
 use conduwuit::{
-	debug, debug_warn, err, error,
-	utils::{available_parallelism, math::usize_from_u64_truncated, ReadyExt, TryReadyExt},
-	warn, Result, Server,
+	Result, Server, debug, debug_warn, err, error,
+	smallvec::SmallVec,
+	utils::{ReadyExt, TryReadyExt, available_parallelism, math::usize_from_u64_truncated},
+	warn,
 };
 use futures::{FutureExt, Stream, StreamExt};
 use ruma::{
-	api::{appservice::Registration, OutgoingRequest},
 	RoomId, ServerName, UserId,
+	api::{OutgoingRequest, appservice::Registration},
 };
-use smallvec::SmallVec;
-use tokio::task::JoinSet;
+use tokio::{task, task::JoinSet};
 
 use self::data::Data;
 pub use self::{
@@ -30,8 +30,8 @@ pub use self::{
 	sender::{EDU_LIMIT, PDU_LIMIT},
 };
 use crate::{
-	account_data, client, federation, globals, presence, pusher, rooms,
-	rooms::timeline::RawPduId, users, Dep,
+	Dep, account_data, client, federation, globals, presence, pusher, rooms,
+	rooms::timeline::RawPduId, users,
 };
 
 pub struct Service {
@@ -111,8 +111,15 @@ impl crate::Service for Service {
 				.enumerate()
 				.fold(JoinSet::new(), |mut joinset, (id, _)| {
 					let self_ = self.clone();
+					let worker = self_.sender(id);
+					let worker = if self.unconstrained() {
+						task::unconstrained(worker).boxed()
+					} else {
+						worker.boxed()
+					};
+
 					let runtime = self.server.runtime();
-					let _abort = joinset.spawn_on(self_.sender(id).boxed(), runtime);
+					let _abort = joinset.spawn_on(worker, runtime);
 					joinset
 				});
 
@@ -124,7 +131,7 @@ impl crate::Service for Service {
 				| Err(error) => {
 					error!(id = ?error.id(), ?error, "sender worker finished");
 				},
-			};
+			}
 		}
 
 		Ok(())
@@ -139,6 +146,8 @@ impl crate::Service for Service {
 	}
 
 	fn name(&self) -> &str { crate::service::make_name(std::module_path!()) }
+
+	fn unconstrained(&self) -> bool { true }
 }
 
 impl Service {

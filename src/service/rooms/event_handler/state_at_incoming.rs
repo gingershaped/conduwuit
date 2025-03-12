@@ -6,12 +6,11 @@ use std::{
 };
 
 use conduwuit::{
-	debug, err, implement, trace,
+	PduEvent, Result, StateMap, debug, err, implement, trace,
 	utils::stream::{BroadbandExt, IterStream, ReadyExt, TryBroadbandExt, TryWidebandExt},
-	PduEvent, Result,
 };
-use futures::{future::try_join, FutureExt, StreamExt, TryFutureExt, TryStreamExt};
-use ruma::{state_res::StateMap, OwnedEventId, RoomId, RoomVersionId};
+use futures::{FutureExt, StreamExt, TryFutureExt, TryStreamExt, future::try_join};
+use ruma::{OwnedEventId, RoomId, RoomVersionId};
 
 use crate::rooms::short::ShortStateHash;
 

@@ -1,15 +1,15 @@
 use std::{
-	collections::{hash_map, BTreeMap, HashMap},
+	collections::{BTreeMap, HashMap, hash_map},
 	sync::Arc,
 };
 
-use conduwuit::{debug, debug_info, err, implement, trace, warn, Err, Error, PduEvent, Result};
-use futures::{future::ready, TryFutureExt};
+use conduwuit::{
+	Err, Error, PduEvent, Result, debug, debug_info, err, implement, state_res, trace, warn,
+};
+use futures::{TryFutureExt, future::ready};
 use ruma::{
-	api::client::error::ErrorKind,
-	events::StateEventType,
-	state_res::{self, EventTypeExt},
 	CanonicalJsonObject, CanonicalJsonValue, EventId, RoomId, ServerName,
+	api::client::error::ErrorKind, events::StateEventType,
 };
 
 use super::{check_room_id, get_room_version_id, to_room_version};
@@ -56,10 +56,11 @@ pub(super) async fn handle_outlier_pdu<'a>(
 
 			obj
 		},
-		| Err(e) =>
+		| Err(e) => {
 			return Err!(Request(InvalidParam(debug_error!(
 				"Signature verification failed for {event_id}: {e}"
-			)))),
+			))));
+		},
 	};
 
 	// Now that we have checked the signature and hashes we can add the eventID and
@@ -123,7 +124,7 @@ pub(super) async fn handle_outlier_pdu<'a>(
 	// The original create event must be in the auth events
 	if !matches!(
 		auth_events
-			.get(&(StateEventType::RoomCreate, String::new()))
+			.get(&(StateEventType::RoomCreate, String::new().into()))
 			.map(AsRef::as_ref),
 		Some(_) | None
 	) {
@@ -133,8 +134,8 @@ pub(super) async fn handle_outlier_pdu<'a>(
 		));
 	}
 
-	let state_fetch = |ty: &'static StateEventType, sk: &str| {
-		let key = ty.with_state_key(sk);
+	let state_fetch = |ty: &StateEventType, sk: &str| {
+		let key = (ty.to_owned(), sk.into());
 		ready(auth_events.get(&key))
 	};
 

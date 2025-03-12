@@ -3,25 +3,25 @@ mod v4;
 mod v5;
 
 use conduwuit::{
-	utils::{
-		stream::{BroadbandExt, ReadyExt, TryIgnore},
-		IterStream,
-	},
 	PduCount,
+	utils::{
+		IterStream,
+		stream::{BroadbandExt, ReadyExt, TryIgnore},
+	},
 };
-use futures::{pin_mut, StreamExt};
+use futures::{StreamExt, pin_mut};
 use ruma::{
+	RoomId, UserId,
 	directory::RoomTypeFilter,
 	events::TimelineEventType::{
 		self, Beacon, CallInvite, PollStart, RoomEncrypted, RoomMessage, Sticker,
 	},
-	RoomId, UserId,
 };
 
 pub(crate) use self::{
 	v3::sync_events_route, v4::sync_events_v4_route, v5::sync_events_v5_route,
 };
-use crate::{service::Services, Error, PduEvent, Result};
+use crate::{Error, PduEvent, Result, service::Services};
 
 pub(crate) const DEFAULT_BUMP_TYPES: &[TimelineEventType; 6] =
 	&[CallInvite, PollStart, Beacon, RoomEncrypted, RoomMessage, Sticker];
@@ -76,11 +76,13 @@ async fn share_encrypted_room(
 		.state_cache
 		.get_shared_rooms(sender_user, user_id)
 		.ready_filter(|&room_id| Some(room_id) != ignore_room)
-		.broad_any(|other_room_id| {
+		.map(ToOwned::to_owned)
+		.broad_any(|other_room_id| async move {
 			services
 				.rooms
 				.state_accessor
-				.is_encrypted_room(other_room_id)
+				.is_encrypted_room(&other_room_id)
+				.await
 		})
 		.await
 }

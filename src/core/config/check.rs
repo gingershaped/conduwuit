@@ -4,7 +4,7 @@ use either::Either;
 use figment::Figment;
 
 use super::DEPRECATED_KEYS;
-use crate::{debug, debug_info, debug_warn, error, warn, Config, Err, Result, Server};
+use crate::{Config, Err, Result, Server, debug, debug_info, debug_warn, error, warn};
 
 /// Performs check() with additional checks specific to reloading old config
 /// with new config.
@@ -27,6 +27,10 @@ pub fn check(config: &Config) -> Result {
 	if cfg!(debug_assertions) {
 		warn!("Note: conduwuit was built without optimisations (i.e. debug build)");
 	}
+
+	if config.allow_invalid_tls_certificates_yes_i_know_what_the_fuck_i_am_doing_with_this_and_i_know_this_is_insecure {
+        warn!("\n\nWARNING: \n\nTLS CERTIFICATE VALIDATION IS DISABLED, THIS IS HIGHLY INSECURE AND SHOULD NOT BE USED IN PRODUCTION.\n\n");
+    }
 
 	warn_deprecated(config);
 	warn_unknown_key(config);
@@ -123,6 +127,14 @@ pub fn check(config: &Config) -> Result {
 			"emergency_password",
 			"The public example emergency password is being used, this is insecure. Please \
 			 change this."
+		));
+	}
+
+	if config.emergency_password == Some(String::new()) {
+		return Err!(Config(
+			"emergency_password",
+			"Emergency password was set to an empty string, this is not valid. Unset \
+			 emergency_password to disable it or set it to a real password."
 		));
 	}
 

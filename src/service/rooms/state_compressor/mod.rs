@@ -5,11 +5,11 @@ use std::{
 	sync::{Arc, Mutex},
 };
 
-use arrayvec::ArrayVec;
 use conduwuit::{
+	Result,
+	arrayvec::ArrayVec,
 	at, checked, err, expected, utils,
 	utils::{bytes, math::usize_from_f64, stream::IterStream},
-	Result,
 };
 use database::Map;
 use futures::{Stream, StreamExt};
@@ -17,9 +17,8 @@ use lru_cache::LruCache;
 use ruma::{EventId, RoomId};
 
 use crate::{
-	rooms,
+	Dep, rooms,
 	rooms::short::{ShortEventId, ShortId, ShortStateHash, ShortStateKey},
-	Dep,
 };
 
 pub struct Service {
@@ -304,7 +303,7 @@ impl Service {
 			});
 
 			return Ok(());
-		};
+		}
 
 		// Else we have two options.
 		// 1. We add the current diff on top of the parent layer.
@@ -420,7 +419,7 @@ impl Service {
 				2, // every state change is 2 event changes on average
 				states_parents,
 			)?;
-		};
+		}
 
 		Ok(HashSetCompressStateEvent {
 			shortstatehash: new_shortstatehash,

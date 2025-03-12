@@ -1,25 +1,25 @@
 use std::cmp;
 
 use conduwuit::{
-	debug, debug_info, debug_warn, error, info,
+	Err, Result, debug, debug_info, debug_warn, error, info,
 	result::NotFound,
 	utils::{
-		stream::{TryExpect, TryIgnore},
 		IterStream, ReadyExt,
+		stream::{TryExpect, TryIgnore},
 	},
-	warn, Err, Result,
+	warn,
 };
 use futures::{FutureExt, StreamExt};
 use itertools::Itertools;
 use ruma::{
+	OwnedUserId, RoomId, UserId,
 	events::{
-		push_rules::PushRulesEvent, room::member::MembershipState, GlobalAccountDataEventType,
+		GlobalAccountDataEventType, push_rules::PushRulesEvent, room::member::MembershipState,
 	},
 	push::Ruleset,
-	OwnedUserId, RoomId, UserId,
 };
 
-use crate::{media, Services};
+use crate::{Services, media};
 
 /// The current schema version.
 /// - If database is opened at greater version we reject with error. The
@@ -507,8 +507,10 @@ async fn fix_referencedevents_missing_sep(services: &Services) -> Result {
 }
 
 async fn fix_readreceiptid_readreceipt_duplicates(services: &Services) -> Result {
+	use conduwuit::arrayvec::ArrayString;
 	use ruma::identifiers_validation::MAX_BYTES;
-	type ArrayId = arrayvec::ArrayString<MAX_BYTES>;
+
+	type ArrayId = ArrayString<MAX_BYTES>;
 	type Key<'a> = (&'a RoomId, u64, &'a UserId);
 
 	warn!("Fixing undeleted entries in readreceiptid_readreceipt...");

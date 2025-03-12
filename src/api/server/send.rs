@@ -3,20 +3,21 @@ use std::{collections::BTreeMap, net::IpAddr, time::Instant};
 use axum::extract::State;
 use axum_client_ip::InsecureClientIp;
 use conduwuit::{
-	debug,
+	Err, Error, Result, debug,
 	debug::INFO_SPAN_LEVEL,
 	debug_warn, err, error,
 	result::LogErr,
 	trace,
 	utils::{
-		stream::{automatic_width, BroadbandExt, TryBroadbandExt},
 		IterStream, ReadyExt,
+		stream::{BroadbandExt, TryBroadbandExt, automatic_width},
 	},
-	warn, Err, Error, Result,
+	warn,
 };
 use futures::{FutureExt, Stream, StreamExt, TryFutureExt, TryStreamExt};
 use itertools::Itertools;
 use ruma::{
+	CanonicalJsonObject, OwnedEventId, OwnedRoomId, OwnedUserId, RoomId, ServerName, UserId,
 	api::{
 		client::error::ErrorKind,
 		federation::transactions::{
@@ -31,17 +32,16 @@ use ruma::{
 	events::receipt::{ReceiptEvent, ReceiptEventContent, ReceiptType},
 	serde::Raw,
 	to_device::DeviceIdOrAllDevices,
-	CanonicalJsonObject, OwnedEventId, OwnedRoomId, OwnedUserId, RoomId, ServerName, UserId,
 };
 use service::{
-	sending::{EDU_LIMIT, PDU_LIMIT},
 	Services,
+	sending::{EDU_LIMIT, PDU_LIMIT},
 };
 use utils::millis_since_unix_epoch;
 
 use crate::{
-	utils::{self},
 	Ruma,
+	utils::{self},
 };
 
 type ResolvedMap = BTreeMap<OwnedEventId, Result>;
@@ -585,12 +585,10 @@ async fn handle_edu_signing_key_update(
 		return;
 	}
 
-	if let Some(master_key) = master_key {
-		services
-			.users
-			.add_cross_signing_keys(&user_id, &master_key, &self_signing_key, &None, true)
-			.await
-			.log_err()
-			.ok();
-	}
+	services
+		.users
+		.add_cross_signing_keys(&user_id, &master_key, &self_signing_key, &None, true)
+		.await
+		.log_err()
+		.ok();
 }

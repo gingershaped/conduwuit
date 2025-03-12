@@ -4,31 +4,31 @@ use std::{
 };
 
 use conduwuit::{
-	is_not_empty,
+	Result, is_not_empty,
 	result::LogErr,
-	utils::{stream::TryIgnore, ReadyExt, StreamTools},
-	warn, Result,
+	utils::{ReadyExt, StreamTools, stream::TryIgnore},
+	warn,
 };
-use database::{serialize_key, Deserialized, Ignore, Interfix, Json, Map};
-use futures::{future::join5, pin_mut, stream::iter, Stream, StreamExt};
+use database::{Deserialized, Ignore, Interfix, Json, Map, serialize_key};
+use futures::{Stream, StreamExt, future::join5, pin_mut, stream::iter};
 use itertools::Itertools;
 use ruma::{
+	OwnedRoomId, OwnedServerName, RoomId, ServerName, UserId,
 	events::{
+		AnyStrippedStateEvent, AnySyncStateEvent, GlobalAccountDataEventType,
+		RoomAccountDataEventType, StateEventType,
 		direct::DirectEvent,
 		room::{
 			create::RoomCreateEventContent,
 			member::{MembershipState, RoomMemberEventContent},
 			power_levels::RoomPowerLevelsEventContent,
 		},
-		AnyStrippedStateEvent, AnySyncStateEvent, GlobalAccountDataEventType,
-		RoomAccountDataEventType, StateEventType,
 	},
 	int,
 	serde::Raw,
-	OwnedRoomId, OwnedServerName, RoomId, ServerName, UserId,
 };
 
-use crate::{account_data, appservice::RegistrationInfo, globals, rooms, users, Dep};
+use crate::{Dep, account_data, appservice::RegistrationInfo, config, globals, rooms, users};
 
 pub struct Service {
 	appservice_in_room_cache: AppServiceInRoomCache,
@@ -38,6 +38,7 @@ pub struct Service {
 
 struct Services {
 	account_data: Dep<account_data::Service>,
+	config: Dep<config::Service>,
 	globals: Dep<globals::Service>,
 	state_accessor: Dep<rooms::state_accessor::Service>,
 	users: Dep<users::Service>,
@@ -70,6 +71,7 @@ impl crate::Service for Service {
 			appservice_in_room_cache: RwLock::new(HashMap::new()),
 			services: Services {
 				account_data: args.depend::<account_data::Service>("account_data"),
+				config: args.depend::<config::Service>("config"),
 				globals: args.depend::<globals::Service>("globals"),
 				state_accessor: args
 					.depend::<rooms::state_accessor::Service>("rooms::state_accessor"),
@@ -218,7 +220,7 @@ impl Service {
 								)
 								.await
 								.ok();
-						};
+						}
 
 						// Copy direct chat flag
 						if let Ok(mut direct_event) = self
@@ -250,7 +252,7 @@ impl Service {
 									)
 									.await?;
 							}
-						};
+						}
 					}
 				}
 
@@ -267,6 +269,12 @@ impl Service {
 			},
 			| MembershipState::Leave | MembershipState::Ban => {
 				self.mark_as_left(user_id, room_id);
+
+				if self.services.globals.user_is_local(user_id)
+					&& self.services.config.forget_forced_upon_leave
+				{
+					self.forget(room_id, user_id);
+				}
 			},
 			| _ => {},
 		}

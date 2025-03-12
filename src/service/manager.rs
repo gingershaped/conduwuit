@@ -1,14 +1,14 @@
 use std::{panic::AssertUnwindSafe, sync::Arc, time::Duration};
 
-use conduwuit::{debug, debug_warn, error, trace, utils::time, warn, Err, Error, Result, Server};
-use futures::FutureExt;
+use conduwuit::{Err, Error, Result, Server, debug, debug_warn, error, trace, utils::time, warn};
+use futures::{FutureExt, TryFutureExt};
 use tokio::{
 	sync::{Mutex, MutexGuard},
 	task::{JoinHandle, JoinSet},
 	time::sleep,
 };
 
-use crate::{service, service::Service, Services};
+use crate::{Services, service, service::Service};
 
 pub(crate) struct Manager {
 	manager: Mutex<Option<JoinHandle<Result<()>>>>,
@@ -183,8 +183,13 @@ async fn worker(service: Arc<dyn Service>) -> WorkerResult {
 	let service_ = Arc::clone(&service);
 	let result = AssertUnwindSafe(service_.worker())
 		.catch_unwind()
-		.await
 		.map_err(Error::from_panic);
+
+	let result = if service.unconstrained() {
+		tokio::task::unconstrained(result).await
+	} else {
+		result.await
+	};
 
 	// flattens JoinError for panic into worker's Error
 	(service, result.unwrap_or_else(Err))
